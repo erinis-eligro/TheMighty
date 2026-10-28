@@ -17,13 +17,14 @@ import { GAME_EVENTS } from './constants';
 import { SeatPosition } from './constants';
 import { GameWsExceptionFilter } from './game-ws-exception.filter';
 import { Ack, GAME_NAMESPACE, RoomAckData, RoomIdAckData } from './protocol';
-import { CreateRoomDto, JoinRoomDto, PlaceBidDto, PlayCardDto } from './dto/game.dto';
+import { CreateRoomDto, ExchangeKittyDto, JoinRoomDto, PlaceBidDto, PlayCardDto } from './dto/game.dto';
 import { Player } from './entities/game.entity';
 import {
   GameEngine,
   createInitialGameState,
   selectBid,
   selectCardToPlay,
+  selectKittyDiscard,
   generateAiName,
 } from './core';
 import { Role, Giruda } from '@prisma/client';
@@ -96,7 +97,11 @@ export class GameGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
       currentTrickNumber: engine.state.currentTrickNumber,
       leadSuit: engine.state.leadSuit,
       isJokerCallActive: engine.state.isJokerCallActive,
-      kitty: engine.state.kitty,
+      // The kitty (bottom cards, later the president's discards) is only visible to the president.
+      kitty:
+        forPlayerId === engine.state.ownerPlayerId && engine.state.phase !== 'BIDDING'
+          ? engine.state.kitty
+          : [],
       giruda: engine.state.giruda,
       ownerPlayerId: engine.state.ownerPlayerId,
       presidentIndex: engine.state.presidentIndex,
@@ -133,7 +138,13 @@ export class GameGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
   private scheduleAiTurn(roomId: string, delayMs = 1500) {
     const managed = this.getManaged(roomId);
     const engine = managed.engine;
-    if (engine.state.phase !== 'BIDDING' && engine.state.phase !== 'TRICK_PLAYING') return;
+    if (
+      engine.state.phase !== 'BIDDING' &&
+      engine.state.phase !== 'KITTY_EXCHANGE' &&
+      engine.state.phase !== 'TRICK_PLAYING'
+    ) {
+      return;
+    }
     const turnPlayer = engine.state.players[engine.state.currentTurnIndex];
     if (!turnPlayer || !turnPlayer.isAi) return;
 
@@ -153,6 +164,14 @@ export class GameGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
             giruda: decision.giruda ?? undefined,
           });
           this.emitBidResult(roomId, turnPlayer.id, decision.bid, decision.giruda, isPass, result);
+        } else if (engine.state.phase === 'KITTY_EXCHANGE') {
+          // The AI president keeps the bid giruda and drops its 3 weakest cards.
+          const decision = selectKittyDiscard({
+            cards: [...turnPlayer.hand, ...engine.state.kitty],
+            giruda: engine.state.giruda as string,
+          });
+          const result = engine.exchangeKitty(turnPlayer.id, decision);
+          this.emitKittyExchanged(roomId, turnPlayer.id, result);
         } else if (engine.state.phase === 'TRICK_PLAYING') {
           const currentTrickPlays = engine.state.currentTrick?.cards ?? [];
           const winnerOfCurrent = currentTrickPlays.length > 0 ? currentTrickPlays[currentTrickPlays.length - 1] : null;
@@ -213,6 +232,20 @@ export class GameGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
         presidentPlayerId: result.completed ? result.bidLeader : null,
       });
     }
+  }
+
+  /** Public announcement only: the discarded cards are never broadcast. */
+  private emitKittyExchanged(
+    roomId: string,
+    playerId: string,
+    result: { giruda: string; bidScore: number }
+  ) {
+    this.server.to(roomId).emit(GAME_EVENTS.KITTY_EXCHANGED, {
+      roomId,
+      playerId,
+      giruda: result.giruda,
+      bidScore: result.bidScore,
+    });
   }
 
   @SubscribeMessage(GAME_EVENTS.CREATE_ROOM)
@@ -306,7 +339,12 @@ export class GameGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
   @SubscribeMessage(GAME_EVENTS.GET_STATE)
   handleGetState(@ConnectedSocket() client: Socket, @MessageBody() data: { roomId: string }) {
     const managed = this.getManaged(data.roomId);
-    client.emit(GAME_EVENTS.STATE_SYNC, this.publicState(managed, client.id));
+    // Mask for the player bound to this socket (a socket id is not a player id).
+    let forPlayerId = '';
+    for (const [playerId, socketId] of managed.socketByPlayerId) {
+      if (socketId === client.id) forPlayerId = playerId;
+    }
+    client.emit(GAME_EVENTS.STATE_SYNC, this.publicState(managed, forPlayerId));
     return this.ok<RoomIdAckData>({ roomId: data.roomId });
   }
 
@@ -355,6 +393,36 @@ export class GameGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
 
     // The engine decides when bidding ends; if the next turn is an AI, let it act.
     this.scheduleAiTurn(dto.roomId);
+
+    return this.ok<RoomAckData>({ roomId: dto.roomId, playerId: dto.playerId });
+  }
+
+  @SubscribeMessage(GAME_EVENTS.EXCHANGE_KITTY)
+  @UsePipes(new ValidationPipe({ whitelist: true, transform: true }))
+  handleExchangeKitty(@ConnectedSocket() client: Socket, @MessageBody() dto: ExchangeKittyDto) {
+    const managed = this.getManaged(dto.roomId);
+    const engine = managed.engine;
+
+    // Identity is decided by the server: the socket must be the one bound to dto.playerId.
+    const player = engine.state.players.find((p) => p.id === dto.playerId);
+    if (!player || player.isAi || managed.socketByPlayerId.get(dto.playerId) !== client.id) {
+      throw new WsException({ code: 'INVALID_PLAYER', message: 'Only the human president can exchange the kitty' });
+    }
+    if (engine.state.phase !== 'KITTY_EXCHANGE') {
+      throw new WsException({ code: 'INVALID_PHASE', message: 'Not in kitty exchange phase' });
+    }
+    if (engine.state.ownerPlayerId !== player.id) {
+      throw new WsException({ code: 'NOT_PRESIDENT', message: 'Only the president can exchange the kitty' });
+    }
+
+    const result = engine.exchangeKitty(dto.playerId, {
+      discardCardIds: dto.discardCardIds,
+      giruda: dto.giruda,
+      bidScore: dto.bidScore,
+    });
+
+    this.emitKittyExchanged(dto.roomId, dto.playerId, result);
+    this.broadcastState(managed);
 
     return this.ok<RoomAckData>({ roomId: dto.roomId, playerId: dto.playerId });
   }

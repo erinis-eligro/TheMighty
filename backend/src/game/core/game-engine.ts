@@ -3,9 +3,18 @@ import { SeatPosition } from '../constants';
 import { createDeck, shuffleDeck, validateDeck } from './deck';
 import { dealCards } from './deal';
 import { validatePlay, determineTrickWinner } from './trick';
-import { validateBid, bidRank } from './bidding';
+import { validateBid, bidRank, BID_GIRUDAS } from './bidding';
 import { calculateTrickPoints, evaluateGameResult } from './score';
-import { getMightyCard, getJokerCallCard, isJokerCallCard, isPointCard, TOTAL_TRICKS, MAX_BID } from './rules';
+import {
+  getMightyCard,
+  getJokerCallCard,
+  isJokerCallCard,
+  isPointCard,
+  TOTAL_TRICKS,
+  MAX_BID,
+  KITTY_SIZE,
+  GIRUDA_CHANGE_RAISE,
+} from './rules';
 import { assertTransition } from './phase';
 
 export type { GamePhase };
@@ -260,12 +269,90 @@ export class GameEngine {
     this.setTurn(highest.bidderIndex);
   }
 
-  /** KITTY_EXCHANGE -> FRIEND_SELECTION. (Kitty handling itself is not implemented yet.) */
-  completeKittyExchange(): void {
+  /**
+   * KITTY_EXCHANGE -> FRIEND_SELECTION. The president picks up the 3 kitty
+   * cards (13 in hand), discards exactly 3 of them and finalizes the giruda.
+   *
+   * Rules:
+   * - Only the president may exchange, and every discard must be a distinct
+   *   card of the 13-card hand (kitty cards included).
+   * - Keeping the bid giruda is free. Changing it requires raising the bid
+   *   score by at least `GIRUDA_CHANGE_RAISE` (capped at MAX_BID), passed as `bidScore`.
+   * - Discarded point cards are not counted for either team; the discards are
+   *   stored in `state.kitty` (visible to the president only).
+   *
+   * Validation happens before any state is touched, so a rejected exchange
+   * leaves the game unchanged.
+   */
+  exchangeKitty(
+    playerId: string,
+    action: { discardCardIds: string[]; giruda?: string; bidScore?: number }
+  ): { giruda: BidGiruda; bidScore: number; discarded: Card[] } {
     if (this.state.phase !== 'KITTY_EXCHANGE') {
       throw new Error('Not in kitty exchange phase');
     }
+
+    const playerIndex = this.indexOfPlayer(playerId);
+    if (playerIndex < 0) {
+      throw new Error('Player not found');
+    }
+    if (playerIndex !== this.state.presidentIndex) {
+      throw new Error('Only the president can exchange the kitty');
+    }
+
+    const ids = action.discardCardIds;
+    if (!Array.isArray(ids) || ids.length !== KITTY_SIZE) {
+      throw new Error('must_discard_exactly_3');
+    }
+    if (new Set(ids).size !== ids.length) {
+      throw new Error('duplicate_discard');
+    }
+
+    const president = this.state.players[playerIndex];
+    const combined = [...president.hand, ...this.state.kitty];
+    if (!ids.every((id) => combined.some((c) => c.id === id))) {
+      throw new Error('discard_not_in_hand');
+    }
+
+    const bid = this.state.highestBid;
+    if (!bid) {
+      throw new Error('No bid has been placed');
+    }
+    const requestedGiruda = (action.giruda ?? bid.giruda) as BidGiruda;
+    if (!BID_GIRUDAS.includes(requestedGiruda)) {
+      throw new Error('invalid_giruda');
+    }
+
+    let finalScore = bid.score;
+    if (requestedGiruda !== bid.giruda) {
+      const raised = action.bidScore;
+      if (raised === undefined || !Number.isInteger(raised)) {
+        throw new Error('bid_raise_required');
+      }
+      if (raised < bid.score + GIRUDA_CHANGE_RAISE) {
+        throw new Error('bid_raise_too_small');
+      }
+      if (raised > MAX_BID) {
+        throw new Error('bid_above_maximum');
+      }
+      finalScore = raised;
+    } else if (action.bidScore !== undefined && action.bidScore !== bid.score) {
+      // Without a giruda change the bid score is fixed.
+      throw new Error('bid_raise_requires_giruda_change');
+    }
+
     this.transition('FRIEND_SELECTION');
+
+    const discarded = combined.filter((c) => ids.includes(c.id));
+    president.hand = combined.filter((c) => !ids.includes(c.id));
+    this.state.kitty = discarded;
+
+    this.state.highestBid = { ...bid, score: finalScore, giruda: requestedGiruda };
+    this.state.currentBid = finalScore;
+    this.bidScore = finalScore;
+    this.applyGiruda(requestedGiruda);
+
+    return { giruda: requestedGiruda, bidScore: finalScore, discarded };
   }
 
   /** FRIEND_SELECTION -> TRICK_PLAYING. The president leads the first trick. */

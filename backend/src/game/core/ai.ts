@@ -13,6 +13,7 @@ import {
   GIRUDA_BASE_STRENGTH,
   MIN_BID,
   MAX_BID,
+  KITTY_SIZE,
   Suit,
   Rank,
 } from './rules';
@@ -105,6 +106,29 @@ export function selectBid({
   }
 
   return { bid: null, giruda: null, reason: 'pass' };
+}
+
+/**
+ * Picks the 3 cards the AI president discards from its 13 cards (hand + kitty):
+ * the weakest ones, never the joker, the mighty or a point card unless unavoidable,
+ * and giruda cards last. The giruda is kept as bid.
+ */
+export function selectKittyDiscard({
+  cards,
+  giruda,
+}: {
+  cards: Card[];
+  giruda: string;
+}): { discardCardIds: string[] } {
+  const keepValue = (c: Card): number => {
+    if (isJokerCard(c) || isMightyCard(c, giruda)) return 1000;
+    return cardPlayStrength(c, giruda) + (isPointCard(c) ? 30 : 0);
+  };
+  const discardCardIds = [...cards]
+    .sort((a, b) => keepValue(a) - keepValue(b))
+    .slice(0, KITTY_SIZE)
+    .map((c) => c.id);
+  return { discardCardIds };
 }
 
 function cardPlayStrength(card: Card, giruda: string): number {

@@ -19,6 +19,10 @@ export const GAME_EVENTS = {
   BID_PLACED: 'bid_placed',
   BID_ROUND_COMPLETE: 'bid_round_complete',
 
+  // Kitty exchange
+  EXCHANGE_KITTY: 'exchange_kitty',
+  KITTY_EXCHANGED: 'kitty_exchanged',
+
   // Turn play
   PLAY_CARD: 'play_card',
   CARD_PLAYED: 'card_played',
