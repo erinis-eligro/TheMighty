@@ -34,6 +34,7 @@ export class GameEngine {
   private _trickNumber = 0;
   private teamPoints = 0;
   private bidScore = 0;
+  private _resolvedWinnerIndex = 0;
 
   get mightyCard() {
     return this._mightyCard;
@@ -380,7 +381,10 @@ export class GameEngine {
     this.setTurn(this.state.presidentIndex ?? FIRST_BIDDER_INDEX);
   }
 
-  playCard(playerId: string, cardId: string): { valid: boolean; trickComplete?: boolean; trick?: Trick; points?: number } {
+  playCard(
+    playerId: string,
+    cardId: string
+  ): { valid: boolean; trickComplete?: boolean; trick?: Trick; points?: number } {
     if (this.state.phase !== 'TRICK_PLAYING') {
       throw new Error('Not in playing phase');
     }
@@ -412,6 +416,7 @@ export class GameEngine {
       totalTricks: TOTAL_TRICKS,
       giruda: this.state.giruda as string,
       jokerCallCard: this._jokerCallCard,
+      restrictGirudaLead: this.restrictsGirudaLead(),
     });
 
     if (!validation.valid) {
@@ -443,7 +448,27 @@ export class GameEngine {
     return { valid: true, trickComplete: false };
   }
 
-  /** TRICK_PLAYING -> TRICK_RESOLVED -> (TRICK_PLAYING | ROUND_SCORING -> GAME_OVER). */
+  /**
+   * True when the current turn player is the president leading the first trick
+   * with a giruda declared: the president may not lead the giruda then.
+   */
+  restrictsGirudaLead(): boolean {
+    const s = this.state;
+    return (
+      s.phase === 'TRICK_PLAYING' &&
+      this._trickNumber === 1 &&
+      s.currentTrick === null &&
+      s.currentTurnIndex === s.presidentIndex &&
+      s.giruda !== 'NO_GIRUDA'
+    );
+  }
+
+  /**
+   * TRICK_PLAYING -> TRICK_RESOLVED. Decides the winner, collects the score
+   * cards and records the trick. The completed trick stays in
+   * `state.currentTrick` so clients can see all 5 cards; the game moves on
+   * with `advanceAfterTrick()` once the resolve delay has passed.
+   */
   private resolveTrick(): { valid: boolean; trickComplete: true; trick: Trick; points: number } {
     const trick = this.state.currentTrick!;
     this.transition('TRICK_RESOLVED');
@@ -459,6 +484,22 @@ export class GameEngine {
     trick.winnerPlayerId = result.winnerPlayerId;
     trick.winnerIndex = winnerIndex;
     this.state.trickHistory.push(trick);
+    this._resolvedWinnerIndex = winnerIndex;
+
+    // "First trick" friend: whoever wins the first trick becomes the friend.
+    // If the president wins it, there is no friend (the president plays alone).
+    if (
+      trick.trickNumber === 1 &&
+      this.state.friendDeclaration?.type === 'FIRST_TRICK' &&
+      !this.state.friendPlayerId &&
+      winnerIndex !== this.state.presidentIndex
+    ) {
+      this.state.friendIndex = winnerIndex;
+      this.state.friendPlayerId = result.winnerPlayerId;
+      this.state.players = this.state.players.map((p) =>
+        p.id === result.winnerPlayerId ? { ...p, isFriend: true } : p
+      );
+    }
 
     const winner = this.state.players[winnerIndex];
     if (winner) {
@@ -475,6 +516,24 @@ export class GameEngine {
       this.teamPoints += result.points;
     }
 
+    return {
+      valid: true,
+      trickComplete: true,
+      trick,
+      points: result.points,
+    };
+  }
+
+  /**
+   * TRICK_RESOLVED -> TRICK_PLAYING (the trick winner leads the next trick), or
+   * TRICK_RESOLVED -> ROUND_SCORING -> GAME_OVER after the last trick.
+   * Called by the server timer after the resolve delay.
+   */
+  advanceAfterTrick(): { gameOver: boolean } {
+    if (this.state.phase !== 'TRICK_RESOLVED') {
+      throw new Error('Not in trick resolved phase');
+    }
+
     this.state.currentTrick = null;
     this.state.leadSuit = null;
     this.state.isJokerCallActive = false;
@@ -483,18 +542,13 @@ export class GameEngine {
     if (this._trickNumber > TOTAL_TRICKS) {
       this.transition('ROUND_SCORING');
       this.transition('GAME_OVER');
-    } else {
-      this.state.currentTrickNumber = this._trickNumber;
-      this.transition('TRICK_PLAYING');
-      this.setTurn(winnerIndex);
+      return { gameOver: true };
     }
 
-    return {
-      valid: true,
-      trickComplete: true,
-      trick,
-      points: result.points,
-    };
+    this.state.currentTrickNumber = this._trickNumber;
+    this.transition('TRICK_PLAYING');
+    this.setTurn(this._resolvedWinnerIndex);
+    return { gameOver: false };
   }
 
   getResult(): { isWin: boolean; teamPoints: number; bidScore: number } {

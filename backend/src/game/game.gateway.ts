@@ -13,12 +13,12 @@ import { Server, Socket } from 'socket.io';
 import { Logger, UseFilters, UsePipes, ValidationPipe } from '@nestjs/common';
 import { GameService } from './game.service';
 import { PrismaService } from '../prisma/prisma.service';
-import { GAME_EVENTS } from './constants';
+import { GAME_EVENTS, TRICK_RESOLVED_DELAY_MS } from './constants';
 import { SeatPosition } from './constants';
 import { GameWsExceptionFilter } from './game-ws-exception.filter';
 import { Ack, GAME_NAMESPACE, RoomAckData, RoomIdAckData } from './protocol';
 import { CreateRoomDto, ExchangeKittyDto, JoinRoomDto, PlaceBidDto, PlayCardDto } from './dto/game.dto';
-import { Player } from './entities/game.entity';
+import { Player, Trick } from './entities/game.entity';
 import {
   GameEngine,
   createInitialGameState,
@@ -34,6 +34,8 @@ interface ManagedRoom {
   humanPlayerId: string;
   socketByPlayerId: Map<string, string>;
   aiTimers: Map<string, NodeJS.Timeout>;
+  /** Fires after TRICK_RESOLVED_DELAY_MS to start the next trick / finish the game. */
+  resolveTimer?: NodeJS.Timeout;
 }
 
 // CORS origins are configured via the CORS_ORIGIN env var in main.ts (CorsIoAdapter).
@@ -73,6 +75,10 @@ export class GameGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
     if (!managed) return;
     for (const [, t] of managed.aiTimers) clearTimeout(t);
     managed.aiTimers.clear();
+    if (managed.resolveTimer) {
+      clearTimeout(managed.resolveTimer);
+      managed.resolveTimer = undefined;
+    }
   }
 
   private getManaged(roomId: string): ManagedRoom {
@@ -189,6 +195,7 @@ export class GameGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
             isPartnerWinningCurrentTrick: isPartnerWinning,
             mightyCard: engine.mightyCard,
             jokerCallCard: engine.jokerCallCard,
+            restrictGirudaLead: engine.restrictsGirudaLead(),
           });
           const result = engine.playCard(turnPlayer.id, decision.cardId);
           this.server.to(roomId).emit(GAME_EVENTS.CARD_PLAYED, {
@@ -196,14 +203,7 @@ export class GameGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
             playerId: turnPlayer.id,
             cardId: decision.cardId,
           });
-          if (result.trickComplete && result.trick) {
-            this.server.to(roomId).emit(GAME_EVENTS.TURN_COMPLETE, {
-              roomId,
-              trick: result.trick,
-              winnerPlayerId: result.trick.winnerPlayerId,
-              points: result.points,
-            });
-          }
+          this.handleTrickResult(roomId, managed, result);
         }
       } catch (e) {
         this.logger.error(`AI turn error: ${(e as Error).message}`);
@@ -214,6 +214,90 @@ export class GameGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
     }, delayMs);
 
     managed.aiTimers.set(turnPlayer.id, timer);
+  }
+
+  /**
+   * After a card was played: if it completed the trick the engine is now in
+   * TRICK_RESOLVED. Announce the result and let a server timer advance the
+   * game after TRICK_RESOLVED_DELAY_MS so clients can see all 5 cards.
+   */
+  private handleTrickResult(
+    roomId: string,
+    managed: ManagedRoom,
+    result: { trickComplete?: boolean; trick?: Trick; points?: number }
+  ) {
+    if (!result.trickComplete || !result.trick) return;
+    const engine = managed.engine;
+    const trick = result.trick;
+    const winner = engine.state.players.find((p) => p.id === trick.winnerPlayerId);
+
+    this.server.to(roomId).emit(GAME_EVENTS.TURN_COMPLETE, {
+      roomId,
+      trick,
+      winnerPlayerId: trick.winnerPlayerId,
+      points: result.points,
+    });
+    this.server.to(roomId).emit(GAME_EVENTS.TRICK_RESOLVED, {
+      roomId,
+      trick,
+      trickNumber: trick.trickNumber,
+      winnerPlayerId: trick.winnerPlayerId,
+      winnerIndex: trick.winnerIndex,
+      points: result.points,
+      collectedScoreCards: winner?.collectedScoreCards ?? [],
+      friendPlayerId: engine.state.friendPlayerId,
+    });
+
+    if (managed.resolveTimer) clearTimeout(managed.resolveTimer);
+    managed.resolveTimer = setTimeout(() => {
+      managed.resolveTimer = undefined;
+      try {
+        const { gameOver } = engine.advanceAfterTrick();
+        this.broadcastState(managed);
+        if (gameOver) {
+          this.finishGame(roomId, managed);
+        } else {
+          this.scheduleAiTurn(roomId);
+        }
+      } catch (e) {
+        this.logger.error(`Trick advance error: ${(e as Error).message}`);
+      }
+    }, TRICK_RESOLVED_DELAY_MS);
+  }
+
+  private finishGame(roomId: string, managed: ManagedRoom) {
+    const engine = managed.engine;
+    const { isWin, teamPoints, bidScore } = engine.getResult();
+    this.server.to(roomId).emit(GAME_EVENTS.GAME_END, {
+      roomId,
+      isWin,
+      teamPoints,
+      bidScore,
+    });
+    this.clearAiTimers(roomId);
+
+    const human = engine.state.players.find((p) => p.id === managed.humanPlayerId);
+    if (human) {
+      this.prisma.user
+        .upsert({
+          where: { username: human.username },
+          update: {},
+          create: { username: human.username },
+        })
+        .then((u) =>
+          this.prisma.gameHistory.create({
+            data: {
+              user_id: u.id,
+              role: Role.OWNER,
+              is_win: isWin,
+              bid_score: bidScore,
+              team_points: teamPoints,
+              giruda: engine.state.giruda as Giruda,
+            },
+          })
+        )
+        .catch((e: Error) => this.logger.error(`Failed to save game history: ${e.message}`));
+    }
   }
 
   private emitBidResult(
@@ -444,50 +528,11 @@ export class GameGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
       playerId: dto.playerId,
       cardId: dto.cardId,
     });
-
-    if (result.trickComplete && result.trick) {
-      this.server.to(dto.roomId).emit(GAME_EVENTS.TURN_COMPLETE, {
-        roomId: dto.roomId,
-        trick: result.trick,
-        winnerPlayerId: result.trick.winnerPlayerId,
-        points: result.points,
-      });
-    }
-
+    this.handleTrickResult(dto.roomId, managed, result);
     this.broadcastState(managed);
 
-    if (engine.state.phase === 'GAME_OVER') {
-      const { isWin, teamPoints, bidScore } = engine.getResult();
-      this.server.to(dto.roomId).emit(GAME_EVENTS.GAME_END, {
-        roomId: dto.roomId,
-        isWin,
-        teamPoints,
-        bidScore,
-      });
-      this.clearAiTimers(dto.roomId);
-
-      const human = engine.state.players.find((p) => p.id === managed.humanPlayerId);
-      if (human) {
-        this.prisma.user.upsert({
-          where: { username: human.username },
-          update: {},
-          create: { username: human.username },
-        }).then((u) => {
-          this.prisma.gameHistory.create({
-            data: {
-              user_id: u.id,
-              role: Role.OWNER,
-              is_win: isWin,
-              bid_score: bidScore,
-              team_points: teamPoints,
-              giruda: engine.state.giruda as Giruda,
-            },
-          });
-        });
-      }
-      return this.ok<RoomAckData>({ roomId: dto.roomId, playerId: dto.playerId });
-    }
-
+    // After a completed trick the phase is TRICK_RESOLVED and this is a no-op;
+    // the resolve timer schedules the next AI turn.
     this.scheduleAiTurn(dto.roomId);
 
     return this.ok<RoomAckData>({ roomId: dto.roomId, playerId: dto.playerId });

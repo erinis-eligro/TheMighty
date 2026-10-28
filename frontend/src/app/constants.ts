@@ -17,6 +17,7 @@ export const GAME_EVENTS = {
   CARD_PLAYED: 'card_played',
   TURN_BEGIN: 'turn_begin',
   TURN_COMPLETE: 'turn_complete',
+  TRICK_RESOLVED: 'trick_resolved',
   GAME_END: 'game_end',
   GAME_ERROR: 'game_error',
   GET_STATE: 'get_state',

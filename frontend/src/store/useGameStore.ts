@@ -159,7 +159,7 @@ export const useGameStore = create<GameState>((set) => ({
   setPhase: (phase) => set({ phase }),
   setTurn: (turnPlayerId) => set({ turnPlayerId }),
   setCurrentTrick: (currentTrick) => set({ currentTrick }),
-  addTrick: (trick) => set((s) => ({ trickHistory: [...s.trickHistory, trick], currentTrick: null })),
+  addTrick: (trick) => set((s) => ({ trickHistory: [...s.trickHistory, trick] })),
   setKitty: (kitty) => set({ kitty }),
   setGiruda: (giruda) => set({ giruda }),
   setBid: (currentBid, bidLeader) => set({ currentBid, bidLeader }),

@@ -148,6 +148,7 @@ export function selectCardToPlay({
   isPartnerWinningCurrentTrick,
   mightyCard,
   jokerCallCard,
+  restrictGirudaLead,
 }: {
   hand: Card[];
   leadSuit?: string;
@@ -158,6 +159,7 @@ export function selectCardToPlay({
   isPartnerWinningCurrentTrick: boolean;
   mightyCard: { suit: string; rank: string };
   jokerCallCard?: { suit: string; rank: string };
+  restrictGirudaLead?: boolean;
 }): AiPlayDecision {
   const valid = hand.filter((c) => {
     const v = validatePlay({
@@ -168,6 +170,7 @@ export function selectCardToPlay({
       totalTricks,
       giruda,
       jokerCallCard,
+      restrictGirudaLead,
     });
     return v.valid;
   });
