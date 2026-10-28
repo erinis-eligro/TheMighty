@@ -7,7 +7,8 @@ import { GamePhase } from '../entities/game.entity';
 export const ALLOWED_TRANSITIONS: Record<GamePhase, readonly GamePhase[]> = {
   READY: ['DEALING'],
   DEALING: ['BIDDING'],
-  BIDDING: ['KITTY_EXCHANGE'],
+  // BIDDING -> DEALING: everybody passed, the cards are dealt again.
+  BIDDING: ['KITTY_EXCHANGE', 'DEALING'],
   KITTY_EXCHANGE: ['FRIEND_SELECTION'],
   FRIEND_SELECTION: ['TRICK_PLAYING'],
   TRICK_PLAYING: ['TRICK_RESOLVED'],

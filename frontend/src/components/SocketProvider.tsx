@@ -51,6 +51,7 @@ export function SocketProvider({ children }: { children: React.ReactNode }) {
         friendPlayerId: data.friendPlayerId,
         passCount: data.passCount,
         currentBid: data.currentBid,
+        highestBid: data.highestBid,
         bidLeader: data.bidLeader,
         players: data.players.map((p: any) => ({
           id: p.id,
@@ -64,6 +65,7 @@ export function SocketProvider({ children }: { children: React.ReactNode }) {
           isFriend: p.isFriend,
           isOwner: p.isOwner,
           bid: p.bid,
+          hasPassed: p.hasPassed,
         })),
       });
     });

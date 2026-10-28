@@ -22,6 +22,7 @@ export const RANK_STRENGTH: Record<Rank, number> = {
 
 export const POINT_RANKS = ['10', 'J', 'Q', 'K', 'A'] as const;
 export const MIN_BID = 13;
+export const MAX_BID = 20;
 export const TOTAL_TRICKS = 10;
 export const CARDS_PER_PLAYER = 10;
 export const KITTY_SIZE = 3;

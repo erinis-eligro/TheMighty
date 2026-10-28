@@ -4,7 +4,7 @@ export { createDeck, shuffleDeck, validateDeck } from './deck';
 export { dealCards } from './deal';
 export { validatePlay, determineTrickWinner } from './trick';
 export { calculateTrickPoints, evaluateGameResult } from './score';
-export { validateBid } from './bidding';
+export { validateBid, bidRank, lowestValidScore, BID_GIRUDAS, type BidValidation } from './bidding';
 export {
   getMightyCard,
   getJokerCallCard,
@@ -15,6 +15,7 @@ export {
   getPointValue,
   cardBaseStrength,
   MIN_BID,
+  MAX_BID,
   TOTAL_TRICKS,
   CARDS_PER_PLAYER,
   KITTY_SIZE,

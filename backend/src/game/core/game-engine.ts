@@ -1,11 +1,11 @@
-import { Card, Player, GameState, GamePhase, Trick, FriendDeclaration } from '../entities/game.entity';
+import { Card, Player, GameState, GamePhase, Trick, FriendDeclaration, BidGiruda } from '../entities/game.entity';
 import { SeatPosition } from '../constants';
 import { createDeck, shuffleDeck, validateDeck } from './deck';
 import { dealCards } from './deal';
 import { validatePlay, determineTrickWinner } from './trick';
-import { validateBid } from './bidding';
+import { validateBid, bidRank } from './bidding';
 import { calculateTrickPoints, evaluateGameResult } from './score';
-import { getMightyCard, getJokerCallCard, isMightyCard, isJokerCard, isJokerCallCard, isPointCard, TOTAL_TRICKS } from './rules';
+import { getMightyCard, getJokerCallCard, isJokerCallCard, isPointCard, TOTAL_TRICKS, MAX_BID } from './rules';
 import { assertTransition } from './phase';
 
 export type { GamePhase };
@@ -15,6 +15,8 @@ export interface EngineOptions {
   giruda: string;
 }
 
+const FIRST_BIDDER_INDEX = 0;
+
 export class GameEngine {
   state: GameState;
   private deck: Card[] = [];
@@ -23,7 +25,6 @@ export class GameEngine {
   private _trickNumber = 0;
   private teamPoints = 0;
   private bidScore = 0;
-  private ownerId: string;
 
   get mightyCard() {
     return this._mightyCard;
@@ -42,12 +43,6 @@ export class GameEngine {
       throw new Error('Game requires exactly 5 players');
     }
 
-    const ownerIndex = players.findIndex((p) => p.isOwner);
-    if (ownerIndex < 0) {
-      throw new Error('Owner player is required');
-    }
-
-    this.ownerId = players[ownerIndex].id;
     this._mightyCard = getMightyCard(giruda);
     this._jokerCallCard = getJokerCallCard(giruda);
 
@@ -63,14 +58,23 @@ export class GameEngine {
       isJokerCallActive: false,
       kitty: [],
       giruda: giruda as any,
-      ownerPlayerId: this.ownerId,
+      // The president (owner) is decided by bidding, not by who created the room.
+      ownerPlayerId: '',
       presidentIndex: null,
       friendDeclaration: null,
       friendIndex: null,
       friendPlayerId: undefined,
       passCount: 0,
       currentBid: 0,
-      players: players.map((p) => ({ ...p, collectedScoreCards: [], score: 0 })),
+      highestBid: null,
+      players: players.map((p) => ({
+        ...p,
+        isOwner: false,
+        hasPassed: false,
+        bid: undefined,
+        collectedScoreCards: [],
+        score: 0,
+      })),
     };
   }
 
@@ -94,10 +98,14 @@ export class GameEngine {
     return this.state.players.findIndex((p) => p.id === playerId);
   }
 
-  /** READY -> DEALING -> BIDDING. Deals the cards and opens bidding with the owner. */
+  /** READY -> DEALING -> BIDDING. Deals the cards and opens bidding with the first seat. */
   deal(): { hands: Card[][]; kitty: Card[] } {
     this.transition('DEALING');
+    return this.dealAndOpenBidding();
+  }
 
+  /** DEALING -> BIDDING. Shared by the first deal and by a re-deal after everybody passed. */
+  private dealAndOpenBidding(): { hands: Card[][]; kitty: Card[] } {
     const shuffled = shuffleDeck(createDeck());
     if (!validateDeck(shuffled)) {
       throw new Error('Invalid deck');
@@ -110,18 +118,44 @@ export class GameEngine {
     this.state.players = this.state.players.map((p, index) => ({
       ...p,
       hand: hands[index] ?? [],
+      bid: undefined,
+      hasPassed: false,
+      isOwner: false,
     }));
 
     this.transition('BIDDING');
     this.state.currentBid = 0;
+    this.state.highestBid = null;
+    this.state.bidLeader = undefined;
     this.state.passCount = 0;
+    this.state.presidentIndex = null;
+    this.state.ownerPlayerId = '';
     this.bidScore = 0;
-    this.setTurn(this.indexOfPlayer(this.ownerId));
+    this.setTurn(FIRST_BIDDER_INDEX);
 
     return { hands, kitty };
   }
 
-  placeBid(playerId: string, bid?: number, isPass = false): { valid: boolean; currentBid?: number; bidLeader?: string } {
+  /**
+   * Places a bid (score 13~20 + giruda, incl. no-giruda) or passes for the
+   * current player. Passed players are skipped for the rest of the bidding.
+   *
+   * Bidding ends when only the highest bidder is left (or nobody can outbid
+   * the highest bid): the winner becomes president and the phase moves to
+   * KITTY_EXCHANGE. If all five players pass, the cards are dealt again.
+   */
+  placeBid(
+    playerId: string,
+    action: { pass?: boolean; score?: number; giruda?: string }
+  ): {
+    valid: boolean;
+    currentBid: number;
+    bidLeader?: string;
+    /** Bidding finished and a president was chosen. */
+    completed: boolean;
+    /** Everybody passed and new hands were dealt. */
+    redealt: boolean;
+  } {
     if (this.state.phase !== 'BIDDING') {
       throw new Error('Not in bidding phase');
     }
@@ -134,7 +168,13 @@ export class GameEngine {
       throw new Error('Not this player turn');
     }
 
-    const validation = validateBid({ bid, currentBid: this.state.currentBid, isPass });
+    const isPass = action.pass === true;
+    const validation = validateBid({
+      score: action.score,
+      giruda: action.giruda,
+      currentBid: this.state.highestBid,
+      isPass,
+    });
     if (!validation.valid) {
       throw new Error(validation.reason ?? 'invalid_bid');
     }
@@ -143,36 +183,81 @@ export class GameEngine {
 
     if (isPass) {
       player.bid = undefined;
+      player.hasPassed = true;
       this.state.passCount += 1;
     } else {
-      const bidValue = bid ?? 0;
-      player.bid = bidValue;
-      this.state.currentBid = bidValue;
+      const score = action.score as number;
+      const giruda = action.giruda as BidGiruda;
+      player.bid = score;
+      this.state.highestBid = { bidderIndex: playerIndex, score, giruda };
+      this.state.currentBid = score;
       this.state.bidLeader = playerId;
-      this.state.presidentIndex = playerIndex;
-      this.state.passCount = 0;
-      this.bidScore = bidValue;
     }
 
-    this.setTurn(playerIndex + 1);
+    const active = this.state.players.filter((p) => !p.hasPassed);
+    const highest = this.state.highestBid;
+
+    let completed = false;
+    let redealt = false;
+
+    if (!highest && active.length === 0) {
+      // Everybody passed: re-deal.
+      this.transition('DEALING');
+      this.dealAndOpenBidding();
+      redealt = true;
+    } else if (
+      highest &&
+      (active.length === 1 || bidRank(highest.score, highest.giruda) >= bidRank(MAX_BID, 'NO_GIRUDA'))
+    ) {
+      this.completeBidding();
+      completed = true;
+    } else {
+      this.advanceBidTurn(playerIndex);
+    }
 
     return {
       valid: true,
       currentBid: this.state.currentBid,
       bidLeader: this.state.bidLeader,
+      completed,
+      redealt,
     };
   }
 
-  /** BIDDING -> KITTY_EXCHANGE. */
-  completeBidding(): void {
-    if (this.state.phase !== 'BIDDING') {
-      throw new Error('Not in bidding phase');
+  /** Moves the turn to the next player who has not passed. */
+  private advanceBidTurn(fromIndex: number): void {
+    const n = this.state.players.length;
+    for (let step = 1; step <= n; step++) {
+      const idx = (fromIndex + step) % n;
+      if (!this.state.players[idx].hasPassed) {
+        this.setTurn(idx);
+        return;
+      }
+    }
+  }
+
+  /** Recomputes everything derived from the giruda (mighty and joker-call cards). */
+  private applyGiruda(giruda: BidGiruda): void {
+    this.state.giruda = giruda;
+    this._mightyCard = getMightyCard(giruda);
+    this._jokerCallCard = getJokerCallCard(giruda);
+  }
+
+  /** BIDDING -> KITTY_EXCHANGE. Fixes the president, giruda and bid score. */
+  private completeBidding(): void {
+    const highest = this.state.highestBid;
+    if (!highest) {
+      throw new Error('No bid has been placed');
     }
     this.transition('KITTY_EXCHANGE');
-    if (this.state.presidentIndex === null) {
-      this.state.presidentIndex = this.indexOfPlayer(this.ownerId);
-    }
-    this.setTurn(this.state.presidentIndex);
+
+    const president = this.state.players[highest.bidderIndex];
+    this.state.presidentIndex = highest.bidderIndex;
+    this.state.ownerPlayerId = president.id;
+    this.state.players = this.state.players.map((p, i) => ({ ...p, isOwner: i === highest.bidderIndex }));
+    this.bidScore = highest.score;
+    this.applyGiruda(highest.giruda);
+    this.setTurn(highest.bidderIndex);
   }
 
   /** KITTY_EXCHANGE -> FRIEND_SELECTION. (Kitty handling itself is not implemented yet.) */
@@ -205,7 +290,7 @@ export class GameEngine {
     }
     this.state.currentTrickNumber = 1;
     this._trickNumber = 1;
-    this.setTurn(this.state.presidentIndex ?? this.indexOfPlayer(this.ownerId));
+    this.setTurn(this.state.presidentIndex ?? FIRST_BIDDER_INDEX);
   }
 
   playCard(playerId: string, cardId: string): { valid: boolean; trickComplete?: boolean; trick?: Trick; points?: number } {
@@ -296,7 +381,7 @@ export class GameEngine {
     }
 
     const isOwnerTeam =
-      result.winnerPlayerId === this.ownerId ||
+      result.winnerPlayerId === this.state.ownerPlayerId ||
       result.winnerPlayerId === this.state.friendPlayerId;
 
     if (isOwnerTeam) {

@@ -1,4 +1,4 @@
-import { Card, Player } from '../entities/game.entity';
+import { Card, Player, Bid, BidGiruda } from '../entities/game.entity';
 import {
   getMightyCard,
   getJokerCallCard,
@@ -12,13 +12,18 @@ import {
   MIGHTY_STRENGTH,
   GIRUDA_BASE_STRENGTH,
   MIN_BID,
+  MAX_BID,
   Suit,
   Rank,
 } from './rules';
 import { validatePlay } from './trick';
+import { validateBid, lowestValidScore } from './bidding';
 
 export interface AiBidDecision {
-  bid: number | null; // null = pass
+  /** null = pass */
+  bid: number | null;
+  /** Declared giruda; null when passing. */
+  giruda: BidGiruda | null;
   reason: string;
 }
 
@@ -65,35 +70,41 @@ function handStrength(hand: Card[], giruda: string): number {
 
 export function selectBid({
   hand,
-  giruda,
   currentBid,
 }: {
   hand: Card[];
-  giruda: string;
-  currentBid: number;
+  currentBid: Bid | null;
 }): AiBidDecision {
-  const strength = handStrength(hand, giruda);
   const points = countPoints(hand);
   const bestSuit = (['SPADE', 'DIAMOND', 'HEART', 'CLUB'] as Suit[]).reduce(
     (best, s) => (suitLength(hand, s) > suitLength(hand, best) ? s : best),
     'SPADE'
   );
   const longSuit = suitLength(hand, bestSuit);
+  // Declare the longest suit as giruda, evaluating the hand with that giruda.
+  const giruda: BidGiruda = bestSuit;
+  const strength = handStrength(hand, giruda);
 
-  const minBid = Math.max(MIN_BID, currentBid + 1);
+  const lowest = lowestValidScore(giruda, currentBid);
+  if (lowest === null) {
+    return { bid: null, giruda: null, reason: 'cannot_outbid' };
+  }
 
   // Strong hand: bid
   if (strength >= 45 || (points >= 5 && longSuit >= 4)) {
-    const bid = Math.max(minBid, Math.min(20, Math.floor(strength / 2) + 10));
-    return { bid, reason: 'strong_hand' };
+    const wanted = Math.min(MAX_BID, Math.floor(strength / 2) + 10);
+    const bid = Math.max(lowest, wanted);
+    if (bid <= MAX_BID && validateBid({ score: bid, giruda, currentBid }).valid) {
+      return { bid, giruda, reason: 'strong_hand' };
+    }
   }
 
-  // Marginal: bid only if current is minimum
-  if (strength >= 30 && currentBid < MIN_BID + 2) {
-    return { bid: MIN_BID, reason: 'marginal_min_bid' };
+  // Marginal: bid only if the minimum bid is still open
+  if (strength >= 30 && lowest === MIN_BID && !currentBid) {
+    return { bid: MIN_BID, giruda, reason: 'marginal_min_bid' };
   }
 
-  return { bid: null, reason: 'pass' };
+  return { bid: null, giruda: null, reason: 'pass' };
 }
 
 function cardPlayStrength(card: Card, giruda: string): number {

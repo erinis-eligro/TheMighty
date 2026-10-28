@@ -31,6 +31,14 @@ export type FriendDeclaration =
   | { type: 'JOKER' }
   | { type: 'CARD'; suit: Suit; rank: Card['rank'] };
 
+export type BidGiruda = Suit | 'NO_GIRUDA';
+
+export type Bid = {
+  bidderIndex: number;
+  score: number;
+  giruda: BidGiruda;
+};
+
 export type Player = {
   id: string;
   username: string;
@@ -43,6 +51,7 @@ export type Player = {
   isFriend: boolean;
   isOwner: boolean;
   bid?: number;
+  hasPassed?: boolean;
 };
 
 export type TrickCard = {
@@ -85,6 +94,7 @@ interface GameState {
   friendPlayerId?: string;
   passCount: number;
   currentBid: number;
+  highestBid: Bid | null;
   bidLeader?: string;
   isConnected: boolean;
   error: string | null;
@@ -127,6 +137,7 @@ export const useGameStore = create<GameState>((set) => ({
   friendIndex: null,
   passCount: 0,
   currentBid: 0,
+  highestBid: null,
   isConnected: false,
   error: null,
 
@@ -153,6 +164,6 @@ export const useGameStore = create<GameState>((set) => ({
     phase: 'READY', players: [], currentTrick: null, trickHistory: [], currentTrickNumber: 0,
     currentTurnIndex: 0, turnPlayerId: '', leadSuit: null, isJokerCallActive: false, kitty: [],
     presidentIndex: null, friendDeclaration: null, friendIndex: null, friendPlayerId: undefined,
-    passCount: 0, currentBid: 0, bidLeader: undefined, error: null,
+    passCount: 0, currentBid: 0, highestBid: null, bidLeader: undefined, error: null,
   }),
 }));
