@@ -43,3 +43,7 @@ docker compose down -v
   docker compose exec backend npx prisma migrate deploy
   ```
   (또는 Dockerfile의 CMD 앞에 마이그레이션 단계를 추가할 수 있습니다.)
+
+## 환경변수
+- `CORS_ORIGIN` (backend): 허용할 프론트엔드 origin. 쉼표로 여러 개 지정 가능, `*` 는 전체 허용. 기본값 `http://localhost:3000`.
+- `NEXT_PUBLIC_BACKEND_URL` (frontend): 백엔드 주소. 소켓은 이 주소의 `/game` 네임스페이스로 연결합니다.

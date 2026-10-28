@@ -1,0 +1,91 @@
+/**
+ * Socket.io protocol spec for the `/game` namespace.
+ *
+ * This file contains only types/constants (no runtime imports) so it can be
+ * copied verbatim to the frontend: `frontend/src/types/protocol.ts`.
+ * Keep both files in sync when changing the protocol.
+ *
+ * Every client -> server request is acknowledged with an `Ack<T>` envelope:
+ *   success: { ok: true,  data: T }
+ *   failure: { ok: false, error: { code, message } }
+ * On failure the server additionally emits a `game_error` event to the
+ * requesting client.
+ */
+
+export const GAME_NAMESPACE = '/game';
+
+export interface AckError {
+  code: string;
+  message: string;
+}
+
+export type Ack<T = unknown> =
+  | { ok: true; data: T; error?: undefined }
+  | { ok: false; data?: undefined; error: AckError };
+
+/** Payload of the `game_error` event. */
+export type GameErrorPayload = AckError;
+
+// ---- Client -> Server requests and their ack data ----
+
+export interface CreateRoomRequest {
+  username: string;
+}
+export interface RoomAckData {
+  roomId: string;
+  playerId: string;
+}
+
+export interface JoinRoomRequest {
+  roomId: string;
+  username: string;
+}
+
+export interface LeaveRoomRequest {
+  roomId: string;
+  playerId: string;
+}
+
+export interface GetStateRequest {
+  roomId: string;
+}
+export interface RoomIdAckData {
+  roomId: string;
+}
+
+export interface StartGameRequest {
+  roomId: string;
+}
+
+export interface PlaceBidRequest {
+  roomId: string;
+  playerId: string;
+  bid?: number;
+  pass?: boolean;
+}
+
+export interface PlayCardRequest {
+  roomId: string;
+  playerId: string;
+  cardId: string;
+}
+
+type AckFn<T> = (res: Ack<T>) => void;
+
+export interface ClientToServerEvents {
+  create_room: (payload: CreateRoomRequest, ack?: AckFn<RoomAckData>) => void;
+  join_room: (payload: JoinRoomRequest, ack?: AckFn<RoomAckData>) => void;
+  leave_room: (payload: LeaveRoomRequest, ack?: AckFn<RoomAckData>) => void;
+  get_state: (payload: GetStateRequest, ack?: AckFn<RoomIdAckData>) => void;
+  start_game: (payload: StartGameRequest, ack?: AckFn<RoomIdAckData>) => void;
+  place_bid: (payload: PlaceBidRequest, ack?: AckFn<RoomAckData>) => void;
+  play_card: (payload: PlayCardRequest, ack?: AckFn<RoomAckData>) => void;
+}
+
+// ---- Server -> Client events ----
+// Broadcast events (room_created, state_sync, bid_placed, ...) keep their
+// existing payloads; see GameGateway.
+
+export interface ServerToClientEvents {
+  game_error: (payload: GameErrorPayload) => void;
+}

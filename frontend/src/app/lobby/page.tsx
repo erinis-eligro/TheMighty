@@ -2,6 +2,8 @@
 
 import { useEffect } from 'react';
 import { useGameStore } from '@/store/useGameStore';
+import { emitWithAck } from '@/lib/socket';
+import type { RoomAckData } from '@/types/protocol';
 
 export default function LobbyPage() {
   const { socket, isConnected } = useGameStore();
@@ -23,13 +25,16 @@ export default function LobbyPage() {
 
         <div className="space-y-3">
           <button
-            onClick={() => {
+            onClick={async () => {
               const name = prompt('닉네임을 입력하세요') || '플레이어';
-              socket?.emit('create_room', { username: name }, (data: any) => {
-                if (data?.roomId) {
-                  store.setRoom(data.roomId, data.playerId, name);
-                }
-              });
+              if (!socket) return;
+              const res = await emitWithAck<RoomAckData>(socket, 'create_room', { username: name });
+              if (res.ok) {
+                store.setError(null);
+                store.setRoom(res.data.roomId, res.data.playerId, name);
+              } else {
+                store.setError(res.error.message);
+              }
             }}
             disabled={!isConnected}
             className="w-full py-4 bg-[#8B5CF6] text-white rounded-xl font-semibold hover:bg-[#7C3AED] disabled:opacity-50 disabled:cursor-not-allowed transition-colors shadow-lg"
@@ -37,15 +42,17 @@ export default function LobbyPage() {
             방 만들기 (주공)
           </button>
           <button
-            onClick={() => {
+            onClick={async () => {
               const room = prompt('방 코드를 입력하세요');
               const name = prompt('닉네임을 입력하세요') || '플레이어';
               if (!socket || !room) return;
-              socket.emit('join_room', { roomId: room, username: name }, (data: any) => {
-                if (data?.roomId) {
-                  store.setRoom(data.roomId, data.playerId, name);
-                }
-              });
+              const res = await emitWithAck<RoomAckData>(socket, 'join_room', { roomId: room, username: name });
+              if (res.ok) {
+                store.setError(null);
+                store.setRoom(res.data.roomId, res.data.playerId, name);
+              } else {
+                store.setError(res.error.message);
+              }
             }}
             disabled={!isConnected}
             className="w-full py-4 bg-white text-[#8B5CF6] border-2 border-[#8B5CF6] rounded-xl font-semibold hover:bg-[#8B5CF6]/10 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"

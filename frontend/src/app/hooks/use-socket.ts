@@ -1,15 +1,14 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { io } from 'socket.io-client';
-
-const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL ?? 'http://localhost:3001';
+import type { Socket } from 'socket.io-client';
+import { createGameSocket } from '@/lib/socket';
 
 export function useSocket(roomId?: string) {
-  const [socket, setSocket] = useState<ReturnType<typeof io> | null>(null);
+  const [socket, setSocket] = useState<Socket | null>(null);
 
   useEffect(() => {
-    const s = io(BACKEND_URL, { transports: ['websocket', 'polling'] });
+    const s = createGameSocket();
     setSocket(s);
     return () => {
       s.disconnect();

@@ -7,7 +7,7 @@ import { TrickBoard } from '@/components/TrickBoard';
 import { UserHand } from '@/components/UserHand';
 
 export default function GamePage({ params }: { params: { roomId: string } }) {
-  const { socket, roomId, playerId, players, phase, currentBid, isConnected, setPhase, setPlayers, setTurn, setCurrentTrick } = useGameStore();
+  const { socket, roomId, playerId, players, phase, currentBid, isConnected, error, setError, setPhase, setPlayers, setTurn, setCurrentTrick } = useGameStore();
   const store = useGameStore.getState();
 
   useEffect(() => {
@@ -93,6 +93,16 @@ export default function GamePage({ params }: { params: { roomId: string } }) {
           </span>
         </div>
       </header>
+
+      {error && (
+        <div
+          role="alert"
+          className="max-w-7xl mx-auto mb-4 p-3 bg-[#FEE2E2] rounded-lg text-sm text-[#991B1B] flex items-center justify-between"
+        >
+          <span>{error}</span>
+          <button onClick={() => setError(null)} className="ml-4 font-bold" aria-label="닫기">×</button>
+        </div>
+      )}
 
       <div className="max-w-7xl mx-auto relative h-[600px]">
         {players.map((p: PlayerType) => (
