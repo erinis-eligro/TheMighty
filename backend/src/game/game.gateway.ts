@@ -89,13 +89,21 @@ export class GameGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
     return {
       roomId: engine.state.roomId,
       phase: engine.state.phase,
+      currentTurnIndex: engine.state.currentTurnIndex,
       turnPlayerId: engine.state.turnPlayerId,
       currentTrick: engine.state.currentTrick,
-      tricks: engine.state.tricks,
+      trickHistory: engine.state.trickHistory,
+      currentTrickNumber: engine.state.currentTrickNumber,
+      leadSuit: engine.state.leadSuit,
+      isJokerCallActive: engine.state.isJokerCallActive,
       kitty: engine.state.kitty,
       giruda: engine.state.giruda,
       ownerPlayerId: engine.state.ownerPlayerId,
+      presidentIndex: engine.state.presidentIndex,
+      friendDeclaration: engine.state.friendDeclaration,
+      friendIndex: engine.state.friendIndex,
       friendPlayerId: engine.state.friendPlayerId,
+      passCount: engine.state.passCount,
       currentBid: engine.state.currentBid,
       bidLeader: engine.state.bidLeader,
       players: engine.state.players.map((p) => ({
@@ -105,7 +113,8 @@ export class GameGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
         isAi: p.isAi,
         hand: p.id === forPlayerId ? p.hand : p.hand.map(() => ({ hidden: true })),
         handCount: p.hand.length,
-        trickScore: p.trickScore,
+        collectedScoreCards: p.collectedScoreCards,
+        score: p.score,
         isFriend: p.isFriend,
         isOwner: p.isOwner,
         bid: p.bid,
@@ -122,7 +131,8 @@ export class GameGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
   private scheduleAiTurn(roomId: string, delayMs = 1500) {
     const managed = this.getManaged(roomId);
     const engine = managed.engine;
-    const turnPlayer = engine.state.players.find((p) => p.id === engine.state.turnPlayerId);
+    if (engine.state.phase !== 'BIDDING' && engine.state.phase !== 'TRICK_PLAYING') return;
+    const turnPlayer = engine.state.players[engine.state.currentTurnIndex];
     if (!turnPlayer || !turnPlayer.isAi) return;
 
     const existing = managed.aiTimers.get(turnPlayer.id);
@@ -142,7 +152,7 @@ export class GameGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
             bid: decision.bid,
             pass: isPass,
           });
-        } else if (engine.state.phase === 'PLAYING') {
+        } else if (engine.state.phase === 'TRICK_PLAYING') {
           const currentTrickPlays = engine.state.currentTrick?.cards ?? [];
           const winnerOfCurrent = currentTrickPlays.length > 0 ? currentTrickPlays[currentTrickPlays.length - 1] : null;
           const isPartnerWinning = winnerOfCurrent
@@ -154,7 +164,7 @@ export class GameGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
             leadSuit: engine.state.currentTrick?.leadSuit,
             currentTrickPlays,
             giruda: engine.state.giruda as string,
-            turnNumber: engine.state.tricks.length + 1,
+            turnNumber: engine.state.currentTrickNumber,
             totalTricks: 10,
             isPartnerWinningCurrentTrick: isPartnerWinning,
             mightyCard: { suit: 'SPADE', rank: 'A' },
@@ -208,7 +218,8 @@ export class GameGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
         hand: [],
         isReady: false,
         isAi: true,
-        trickScore: 0,
+        collectedScoreCards: [],
+        score: 0,
         isFriend: false,
         isOwner: false,
       })),
@@ -286,14 +297,12 @@ export class GameGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
     const managed = this.getManaged(data.roomId);
     const engine = managed.engine;
 
-    if (engine.state.phase !== 'LOBBY') {
+    if (engine.state.phase !== 'READY') {
       throw new WsException({ code: 'GAME_ALREADY_STARTED', message: 'Game already started' });
     }
 
+    // The engine owns all phase transitions: READY -> DEALING -> BIDDING.
     engine.deal();
-    engine.state.phase = 'BIDDING';
-    engine.state.currentBid = 0;
-    engine.state.turnPlayerId = engine.state.ownerPlayerId;
 
     this.server.to(data.roomId).emit(GAME_EVENTS.DEAL_COMPLETE, {
       roomId: data.roomId,
@@ -317,7 +326,7 @@ export class GameGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
 
     const player = engine.state.players.find((p) => p.id === dto.playerId);
     if (!player || player.isAi) throw new WsException({ code: 'INVALID_PLAYER', message: 'Only human can place bid here' });
-    if (player.id !== engine.state.turnPlayerId) throw new WsException({ code: 'NOT_YOUR_TURN', message: 'Not your turn' });
+    if (engine.state.players[engine.state.currentTurnIndex]?.id !== player.id) throw new WsException({ code: 'NOT_YOUR_TURN', message: 'Not your turn' });
 
     const isPass = dto.pass === true;
     engine.placeBid(dto.playerId, dto.bid, isPass);
@@ -345,7 +354,7 @@ export class GameGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
 
     const player = engine.state.players.find((p) => p.id === dto.playerId);
     if (!player || player.isAi) throw new WsException({ code: 'INVALID_PLAYER', message: 'Only human can play card' });
-    if (player.id !== engine.state.turnPlayerId) throw new WsException({ code: 'NOT_YOUR_TURN', message: 'Not your turn' });
+    if (engine.state.players[engine.state.currentTurnIndex]?.id !== player.id) throw new WsException({ code: 'NOT_YOUR_TURN', message: 'Not your turn' });
 
     const result = engine.playCard(dto.playerId, dto.cardId);
 
@@ -366,7 +375,7 @@ export class GameGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
 
     this.broadcastState(managed);
 
-    if (engine.state.phase === 'ENDED') {
+    if (engine.state.phase === 'GAME_OVER') {
       const { isWin, teamPoints, bidScore } = engine.getResult();
       this.server.to(dto.roomId).emit(GAME_EVENTS.GAME_END, {
         roomId: dto.roomId,

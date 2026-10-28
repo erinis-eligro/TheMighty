@@ -1,13 +1,14 @@
-import { Card, Player, GameState, Trick } from '../entities/game.entity';
+import { Card, Player, GameState, GamePhase, Trick, FriendDeclaration } from '../entities/game.entity';
 import { SeatPosition } from '../constants';
 import { createDeck, shuffleDeck, validateDeck } from './deck';
 import { dealCards } from './deal';
 import { validatePlay, determineTrickWinner } from './trick';
 import { validateBid } from './bidding';
 import { calculateTrickPoints, evaluateGameResult } from './score';
-import { getMightyCard, getJokerCallCard, isMightyCard, isJokerCard } from './rules';
+import { getMightyCard, getJokerCallCard, isMightyCard, isJokerCard, isJokerCallCard, isPointCard, TOTAL_TRICKS } from './rules';
+import { assertTransition } from './phase';
 
-export type GamePhase = 'LOBBY' | 'BIDDING' | 'PLAYING' | 'ENDED';
+export type { GamePhase };
 
 export interface EngineOptions {
   players: Player[];
@@ -23,7 +24,6 @@ export class GameEngine {
   private teamPoints = 0;
   private bidScore = 0;
   private ownerId: string;
-  private friendId?: string;
 
   get mightyCard() {
     return this._mightyCard;
@@ -42,31 +42,62 @@ export class GameEngine {
       throw new Error('Game requires exactly 5 players');
     }
 
-    const owner = players.find((p) => p.isOwner);
-    if (!owner) {
+    const ownerIndex = players.findIndex((p) => p.isOwner);
+    if (ownerIndex < 0) {
       throw new Error('Owner player is required');
     }
 
-    this.ownerId = owner.id;
+    this.ownerId = players[ownerIndex].id;
     this._mightyCard = getMightyCard(giruda);
     this._jokerCallCard = getJokerCallCard(giruda);
 
     this.state = {
       roomId: '',
-      phase: 'LOBBY',
+      phase: 'READY',
+      currentTurnIndex: 0,
       turnPlayerId: players[0].id,
       currentTrick: null,
-      tricks: [],
+      trickHistory: [],
+      currentTrickNumber: 0,
+      leadSuit: null,
+      isJokerCallActive: false,
       kitty: [],
       giruda: giruda as any,
       ownerPlayerId: this.ownerId,
+      presidentIndex: null,
+      friendDeclaration: null,
+      friendIndex: null,
       friendPlayerId: undefined,
+      passCount: 0,
       currentBid: 0,
-      players: players.map((p) => ({ ...p, trickScore: 0 })),
+      players: players.map((p) => ({ ...p, collectedScoreCards: [], score: 0 })),
     };
   }
 
+  /**
+   * The only way to change `state.phase`. Throws if the transition is not
+   * allowed by the state machine (see ALLOWED_TRANSITIONS in ./phase).
+   */
+  transition(to: GamePhase): void {
+    assertTransition(this.state.phase, to);
+    this.state.phase = to;
+  }
+
+  /** Sets whose turn it is. `currentTurnIndex` is the source of truth. */
+  private setTurn(index: number): void {
+    const n = this.state.players.length;
+    this.state.currentTurnIndex = ((index % n) + n) % n;
+    this.state.turnPlayerId = this.state.players[this.state.currentTurnIndex].id;
+  }
+
+  private indexOfPlayer(playerId: string): number {
+    return this.state.players.findIndex((p) => p.id === playerId);
+  }
+
+  /** READY -> DEALING -> BIDDING. Deals the cards and opens bidding with the owner. */
   deal(): { hands: Card[][]; kitty: Card[] } {
+    this.transition('DEALING');
+
     const shuffled = shuffleDeck(createDeck());
     if (!validateDeck(shuffled)) {
       throw new Error('Invalid deck');
@@ -81,21 +112,13 @@ export class GameEngine {
       hand: hands[index] ?? [],
     }));
 
-    return { hands, kitty };
-  }
-
-  startBidding(ownerId: string): void {
-    if (this.state.phase !== 'LOBBY') {
-      throw new Error('Game is not in lobby phase');
-    }
-    if (ownerId !== this.ownerId) {
-      throw new Error('Only the owner can start bidding');
-    }
-
-    this.state.phase = 'BIDDING';
+    this.transition('BIDDING');
     this.state.currentBid = 0;
-    this.state.turnPlayerId = this.ownerId;
+    this.state.passCount = 0;
     this.bidScore = 0;
+    this.setTurn(this.indexOfPlayer(this.ownerId));
+
+    return { hands, kitty };
   }
 
   placeBid(playerId: string, bid?: number, isPass = false): { valid: boolean; currentBid?: number; bidLeader?: string } {
@@ -103,27 +126,35 @@ export class GameEngine {
       throw new Error('Not in bidding phase');
     }
 
+    const playerIndex = this.indexOfPlayer(playerId);
+    if (playerIndex < 0) {
+      throw new Error('Player not found');
+    }
+    if (playerIndex !== this.state.currentTurnIndex) {
+      throw new Error('Not this player turn');
+    }
+
     const validation = validateBid({ bid, currentBid: this.state.currentBid, isPass });
     if (!validation.valid) {
       throw new Error(validation.reason ?? 'invalid_bid');
     }
 
-    const player = this.state.players.find((p) => p.id === playerId);
-    if (!player) {
-      throw new Error('Player not found');
-    }
+    const player = this.state.players[playerIndex];
 
     if (isPass) {
       player.bid = undefined;
+      this.state.passCount += 1;
     } else {
       const bidValue = bid ?? 0;
       player.bid = bidValue;
       this.state.currentBid = bidValue;
       this.state.bidLeader = playerId;
+      this.state.presidentIndex = playerIndex;
+      this.state.passCount = 0;
       this.bidScore = bidValue;
     }
 
-    this.state.turnPlayerId = this.nextPlayerId(playerId);
+    this.setTurn(playerIndex + 1);
 
     return {
       valid: true,
@@ -132,33 +163,63 @@ export class GameEngine {
     };
   }
 
-  completeBidding(friendId?: string): void {
+  /** BIDDING -> KITTY_EXCHANGE. */
+  completeBidding(): void {
     if (this.state.phase !== 'BIDDING') {
       throw new Error('Not in bidding phase');
     }
+    this.transition('KITTY_EXCHANGE');
+    if (this.state.presidentIndex === null) {
+      this.state.presidentIndex = this.indexOfPlayer(this.ownerId);
+    }
+    this.setTurn(this.state.presidentIndex);
+  }
 
-    this.state.phase = 'PLAYING';
+  /** KITTY_EXCHANGE -> FRIEND_SELECTION. (Kitty handling itself is not implemented yet.) */
+  completeKittyExchange(): void {
+    if (this.state.phase !== 'KITTY_EXCHANGE') {
+      throw new Error('Not in kitty exchange phase');
+    }
+    this.transition('FRIEND_SELECTION');
+  }
+
+  /** FRIEND_SELECTION -> TRICK_PLAYING. The president leads the first trick. */
+  selectFriend(declaration: FriendDeclaration, friendId?: string): void {
+    if (this.state.phase !== 'FRIEND_SELECTION') {
+      throw new Error('Not in friend selection phase');
+    }
+
+    const friendIndex = friendId ? this.indexOfPlayer(friendId) : -1;
+    if (friendId && friendIndex < 0) {
+      throw new Error('Friend player not found');
+    }
+
+    this.transition('TRICK_PLAYING');
+    this.state.friendDeclaration = declaration;
+    this.state.friendIndex = friendIndex >= 0 ? friendIndex : null;
     this.state.friendPlayerId = friendId;
     if (friendId) {
       this.state.players = this.state.players.map((p) =>
         p.id === friendId ? { ...p, isFriend: true } : p
       );
     }
-    this.state.turnPlayerId = this.state.bidLeader ?? this.ownerId;
+    this.state.currentTrickNumber = 1;
     this._trickNumber = 1;
+    this.setTurn(this.state.presidentIndex ?? this.indexOfPlayer(this.ownerId));
   }
 
   playCard(playerId: string, cardId: string): { valid: boolean; trickComplete?: boolean; trick?: Trick; points?: number } {
-    if (this.state.phase !== 'PLAYING') {
+    if (this.state.phase !== 'TRICK_PLAYING') {
       throw new Error('Not in playing phase');
     }
 
-    const player = this.state.players.find((p) => p.id === playerId);
-    if (!player) {
+    const playerIndex = this.indexOfPlayer(playerId);
+    if (playerIndex < 0) {
       throw new Error('Player not found');
     }
+    const player = this.state.players[playerIndex];
 
-    if (player.id !== this.state.turnPlayerId) {
+    if (playerIndex !== this.state.currentTurnIndex) {
       throw new Error('Not this player turn');
     }
 
@@ -176,7 +237,7 @@ export class GameEngine {
       hand: player.hand,
       leadSuit,
       turnNumber: this._trickNumber,
-      totalTricks: 10,
+      totalTricks: TOTAL_TRICKS,
       giruda: this.state.giruda as string,
       jokerCallCard: this._jokerCallCard,
     });
@@ -190,73 +251,87 @@ export class GameEngine {
     if (!this.state.currentTrick) {
       this.state.currentTrick = {
         id: `trick_${this._trickNumber}`,
+        trickNumber: this._trickNumber,
         cards: [],
         leadSuit: card.suit as any,
         winnerPlayerId: undefined,
       };
+      this.state.leadSuit = card.suit as any;
+      this.state.isJokerCallActive = isJokerCallCard(card, this.state.giruda as string);
     }
 
-    this.state.currentTrick.cards.push({ playerId, card });
+    this.state.currentTrick.cards.push({ playerId, playerIndex, card });
 
     if (this.state.currentTrick.cards.length === this.state.players.length) {
-      const result = determineTrickWinner({
-        plays: this.state.currentTrick.cards,
-        leadSuit: this.state.currentTrick.leadSuit,
-        giruda: this.state.giruda as string,
-        mightyCard: this._mightyCard,
-      });
-
-      this.state.currentTrick.winnerPlayerId = result.winnerPlayerId;
-      this.state.tricks.push(this.state.currentTrick);
-
-      const winner = this.state.players.find((p) => p.id === result.winnerPlayerId);
-      if (winner) {
-        winner.trickScore += result.points;
-      }
-
-      const isOwnerTeam =
-        result.winnerPlayerId === this.ownerId ||
-        result.winnerPlayerId === this.state.friendPlayerId;
-
-      if (isOwnerTeam) {
-        this.teamPoints += result.points;
-      }
-
-      this._trickNumber++;
-      this.state.currentTrick = null;
-
-      if (this._trickNumber > 10) {
-        this.state.phase = 'ENDED';
-      } else {
-        this.state.turnPlayerId = result.winnerPlayerId;
-      }
-
-      return {
-        valid: true,
-        trickComplete: true,
-        trick: this.state.tricks[this.state.tricks.length - 1],
-        points: result.points,
-      };
+      return this.resolveTrick();
     }
 
-    this.state.turnPlayerId = this.nextPlayerId(playerId);
+    this.setTurn(playerIndex + 1);
 
     return { valid: true, trickComplete: false };
   }
 
+  /** TRICK_PLAYING -> TRICK_RESOLVED -> (TRICK_PLAYING | ROUND_SCORING -> GAME_OVER). */
+  private resolveTrick(): { valid: boolean; trickComplete: true; trick: Trick; points: number } {
+    const trick = this.state.currentTrick!;
+    this.transition('TRICK_RESOLVED');
+
+    const result = determineTrickWinner({
+      plays: trick.cards,
+      leadSuit: trick.leadSuit,
+      giruda: this.state.giruda as string,
+      mightyCard: this._mightyCard,
+    });
+
+    const winnerIndex = this.indexOfPlayer(result.winnerPlayerId);
+    trick.winnerPlayerId = result.winnerPlayerId;
+    trick.winnerIndex = winnerIndex;
+    this.state.trickHistory.push(trick);
+
+    const winner = this.state.players[winnerIndex];
+    if (winner) {
+      const won = trick.cards.map((c) => c.card).filter((c) => isPointCard(c));
+      winner.collectedScoreCards = [...winner.collectedScoreCards, ...won];
+      winner.score = winner.collectedScoreCards.length;
+    }
+
+    const isOwnerTeam =
+      result.winnerPlayerId === this.ownerId ||
+      result.winnerPlayerId === this.state.friendPlayerId;
+
+    if (isOwnerTeam) {
+      this.teamPoints += result.points;
+    }
+
+    this.state.currentTrick = null;
+    this.state.leadSuit = null;
+    this.state.isJokerCallActive = false;
+    this._trickNumber++;
+
+    if (this._trickNumber > TOTAL_TRICKS) {
+      this.transition('ROUND_SCORING');
+      this.transition('GAME_OVER');
+    } else {
+      this.state.currentTrickNumber = this._trickNumber;
+      this.transition('TRICK_PLAYING');
+      this.setTurn(winnerIndex);
+    }
+
+    return {
+      valid: true,
+      trickComplete: true,
+      trick,
+      points: result.points,
+    };
+  }
+
   getResult(): { isWin: boolean; teamPoints: number; bidScore: number } {
-    if (this.state.phase !== 'ENDED') {
+    if (this.state.phase !== 'GAME_OVER') {
       throw new Error('Game has not ended');
     }
 
     const isWin = evaluateGameResult(this.teamPoints, this.bidScore);
     return { isWin, teamPoints: this.teamPoints, bidScore: this.bidScore };
-  }
-
-  private nextPlayerId(currentId: string): string {
-    const ids = this.state.players.map((p) => p.id);
-    const index = ids.indexOf(currentId);
-    return ids[(index + 1) % ids.length];
   }
 }
 

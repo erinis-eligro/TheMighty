@@ -1,23 +1,23 @@
 export const SUITS = ['SPADE', 'DIAMOND', 'HEART', 'CLUB'] as const;
 export type Suit = (typeof SUITS)[number];
 
-export const RANKS = ['3', '4', '5', '6', '7', '8', '9', '10', 'J', 'Q', 'K', 'A', '2'] as const;
+export const RANKS = ['2', '3', '4', '5', '6', '7', '8', '9', '10', 'J', 'Q', 'K', 'A'] as const;
 export type Rank = (typeof RANKS)[number];
 
 export const RANK_STRENGTH: Record<Rank, number> = {
-  3: 1,
-  4: 2,
-  5: 3,
-  6: 4,
-  7: 5,
-  8: 6,
-  9: 7,
-  10: 8,
-  J: 9,
-  Q: 10,
-  K: 11,
-  A: 12,
-  2: 13,
+  2: 2,
+  3: 3,
+  4: 4,
+  5: 5,
+  6: 6,
+  7: 7,
+  8: 8,
+  9: 9,
+  10: 10,
+  J: 11,
+  Q: 12,
+  K: 13,
+  A: 14,
 };
 
 export const POINT_RANKS = ['10', 'J', 'Q', 'K', 'A'] as const;

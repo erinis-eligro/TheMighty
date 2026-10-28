@@ -16,7 +16,7 @@ export default function GamePage({ params }: { params: { roomId: string } }) {
     socket.on('deal_complete', (data: any) => {
       setPhase('BIDDING');
       setPlayers(data.players);
-      store.setTurn(data.players[0]?.id ?? '');
+      // Turn info comes from the following state_sync (backend-authoritative).
     });
 
     socket.on('game_started', (data: any) => {
@@ -31,12 +31,16 @@ export default function GamePage({ params }: { params: { roomId: string } }) {
     socket.on('turn_complete', (data: any) => {
       if (data.trick) {
         store.addTrick(data.trick);
+        if (typeof data.trick.winnerIndex === 'number') {
+          useGameStore.setState({ currentTurnIndex: data.trick.winnerIndex });
+        }
         setTurn(data.winnerPlayerId);
       }
     });
 
     socket.on('state_sync', (data: any) => {
       setPlayers(data.players);
+      useGameStore.setState({ currentTurnIndex: data.currentTurnIndex });
       setTurn(data.turnPlayerId);
       setCurrentTrick(data.currentTrick);
       setPhase(data.phase);
@@ -46,7 +50,7 @@ export default function GamePage({ params }: { params: { roomId: string } }) {
     });
 
     socket.on('game_end', (data: any) => {
-      setPhase('ENDED');
+      setPhase('GAME_OVER');
       alert(`게임 종료! ${data.isWin ? '승리' : '패배'} (팀점수 ${data.teamPoints} / 비딩 ${data.bidScore})`);
     });
 
@@ -88,8 +92,8 @@ export default function GamePage({ params }: { params: { roomId: string } }) {
             <span className="text-[#6B7280] text-xs block">기루다</span>
             <span className="font-bold text-[#1F2937]">{store.giruda}</span>
           </div>
-          <span className={`px-3 py-1 rounded-full text-xs font-bold ${phase === 'BIDDING' ? 'bg-[#FEF3C7] text-[#92400E]' : phase === 'PLAYING' ? 'bg-[#D1FAE5] text-[#047857]' : 'bg-[#E5E7EB] text-[#6B7280]'}`}>
-            {phase === 'BIDDING' ? '비딩 중' : phase === 'PLAYING' ? '플레이 중' : phase === 'ENDED' ? '종료' : '대기'}
+          <span className={`px-3 py-1 rounded-full text-xs font-bold ${phase === 'BIDDING' ? 'bg-[#FEF3C7] text-[#92400E]' : phase === 'TRICK_PLAYING' ? 'bg-[#D1FAE5] text-[#047857]' : 'bg-[#E5E7EB] text-[#6B7280]'}`}>
+            {phase === 'BIDDING' ? '비딩 중' : phase === 'TRICK_PLAYING' || phase === 'TRICK_RESOLVED' ? '플레이 중' : phase === 'GAME_OVER' ? '종료' : '대기'}
           </span>
         </div>
       </header>
@@ -113,14 +117,14 @@ export default function GamePage({ params }: { params: { roomId: string } }) {
 
       <UserHand />
 
-      {phase === 'ENDED' && (
+      {phase === 'GAME_OVER' && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm">
           <div className="bg-white rounded-2xl p-8 max-w-md text-center shadow-2xl">
             <h2 className="text-2xl font-bold text-[#1F2937] mb-2">게임 종료</h2>
             <p className="text-[#6B7280] mb-6">결과를 확인하세요.</p>
             <button
               onClick={() => {
-                store.setPhase('LOBBY');
+                store.setPhase('READY');
                 store.setPlayers([]);
                 location.reload();
               }}

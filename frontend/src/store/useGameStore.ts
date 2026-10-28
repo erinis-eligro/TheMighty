@@ -6,10 +6,30 @@ import type { GameErrorPayload } from '@/types/protocol';
 export type Card = {
   id: string;
   suit: 'SPADE' | 'DIAMOND' | 'HEART' | 'CLUB' | 'JOKER';
-  rank: '3' | '4' | '5' | '6' | '7' | '8' | '9' | '10' | 'J' | 'Q' | 'K' | 'A' | '2';
+  rank: '2' | '3' | '4' | '5' | '6' | '7' | '8' | '9' | '10' | 'J' | 'Q' | 'K' | 'A';
   isJoker: boolean;
   hidden?: boolean;
 };
+
+export type Suit = 'SPADE' | 'DIAMOND' | 'HEART' | 'CLUB';
+
+export type GamePhase =
+  | 'READY'
+  | 'DEALING'
+  | 'BIDDING'
+  | 'KITTY_EXCHANGE'
+  | 'FRIEND_SELECTION'
+  | 'TRICK_PLAYING'
+  | 'TRICK_RESOLVED'
+  | 'ROUND_SCORING'
+  | 'GAME_OVER';
+
+export type FriendDeclaration =
+  | { type: 'NO_FRIEND' }
+  | { type: 'FIRST_TRICK' }
+  | { type: 'MIGHTY' }
+  | { type: 'JOKER' }
+  | { type: 'CARD'; suit: Suit; rank: Card['rank'] };
 
 export type Player = {
   id: string;
@@ -18,20 +38,27 @@ export type Player = {
   isAi: boolean;
   hand: Card[];
   handCount: number;
-  trickScore: number;
+  collectedScoreCards: Card[];
+  score: number;
   isFriend: boolean;
   isOwner: boolean;
   bid?: number;
 };
 
-export type Trick = {
-  id: string;
-  cards: { playerId: string; card: Card }[];
-  leadSuit?: string;
-  winnerPlayerId?: string;
+export type TrickCard = {
+  playerId: string;
+  playerIndex: number;
+  card: Card;
 };
 
-type GamePhase = 'LOBBY' | 'BIDDING' | 'PLAYING' | 'ENDED';
+export type Trick = {
+  id: string;
+  trickNumber: number;
+  cards: TrickCard[];
+  leadSuit?: Suit;
+  winnerPlayerId?: string;
+  winnerIndex?: number;
+};
 
 interface GameState {
   socket: Socket | null;
@@ -39,14 +66,24 @@ interface GameState {
   playerId: string;
   username: string;
   phase: GamePhase;
+  /** Source of truth for the current turn (index into `players`). */
+  currentTurnIndex: number;
+  /** Mirror of `players[currentTurnIndex].id`. */
   turnPlayerId: string;
   players: Player[];
   currentTrick: Trick | null;
-  tricks: Trick[];
+  trickHistory: Trick[];
+  currentTrickNumber: number;
+  leadSuit: Suit | null;
+  isJokerCallActive: boolean;
   kitty: Card[];
   giruda: string;
   ownerPlayerId: string;
+  presidentIndex: number | null;
+  friendDeclaration: FriendDeclaration | null;
+  friendIndex: number | null;
   friendPlayerId?: string;
+  passCount: number;
   currentBid: number;
   bidLeader?: string;
   isConnected: boolean;
@@ -73,14 +110,22 @@ export const useGameStore = create<GameState>((set) => ({
   roomId: '',
   playerId: '',
   username: '',
-  phase: 'LOBBY',
+  phase: 'READY',
+  currentTurnIndex: 0,
   turnPlayerId: '',
   players: [],
   currentTrick: null,
-  tricks: [],
+  trickHistory: [],
+  currentTrickNumber: 0,
+  leadSuit: null,
+  isJokerCallActive: false,
   kitty: [],
   giruda: 'NO_GIRUDA',
   ownerPlayerId: '',
+  presidentIndex: null,
+  friendDeclaration: null,
+  friendIndex: null,
+  passCount: 0,
   currentBid: 0,
   isConnected: false,
   error: null,
@@ -93,23 +138,7 @@ export const useGameStore = create<GameState>((set) => ({
     socket.on('connect_error', (err) => set({ error: err.message }));
     socket.on('game_error', (e: GameErrorPayload) => set({ error: e.message }));
     socket.on('room_created', (data: { roomId: string; playerId: string }) =>
-      set({ roomId: data.roomId, playerId: data.playerId, phase: 'LOBBY' }),
-    );
-    socket.on('state_sync', (data: any) =>
-      set({
-        roomId: data.roomId,
-        phase: data.phase,
-        turnPlayerId: data.turnPlayerId,
-        currentTrick: data.currentTrick,
-        tricks: data.tricks,
-        kitty: data.kitty,
-        giruda: data.giruda,
-        ownerPlayerId: data.ownerPlayerId,
-        friendPlayerId: data.friendPlayerId,
-        currentBid: data.currentBid,
-        bidLeader: data.bidLeader,
-        players: data.players,
-      }),
+      set({ roomId: data.roomId, playerId: data.playerId, phase: 'READY' }),
     );
     set({ socket });
   },
@@ -119,13 +148,15 @@ export const useGameStore = create<GameState>((set) => ({
   setPhase: (phase) => set({ phase }),
   setTurn: (turnPlayerId) => set({ turnPlayerId }),
   setCurrentTrick: (currentTrick) => set({ currentTrick }),
-  addTrick: (trick) => set((s) => ({ tricks: [...s.tricks, trick], currentTrick: null })),
+  addTrick: (trick) => set((s) => ({ trickHistory: [...s.trickHistory, trick], currentTrick: null })),
   setKitty: (kitty) => set({ kitty }),
   setGiruda: (giruda) => set({ giruda }),
   setBid: (currentBid, bidLeader) => set({ currentBid, bidLeader }),
   setError: (error) => set({ error }),
   reset: () => set({
-    phase: 'LOBBY', players: [], currentTrick: null, tricks: [], kitty: [], currentBid: 0,
-    bidLeader: undefined, error: null,
+    phase: 'READY', players: [], currentTrick: null, trickHistory: [], currentTrickNumber: 0,
+    currentTurnIndex: 0, turnPlayerId: '', leadSuit: null, isJokerCallActive: false, kitty: [],
+    presidentIndex: null, friendDeclaration: null, friendIndex: null, friendPlayerId: undefined,
+    passCount: 0, currentBid: 0, bidLeader: undefined, error: null,
   }),
 }));

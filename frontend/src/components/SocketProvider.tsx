@@ -21,7 +21,7 @@ export function SocketProvider({ children }: { children: React.ReactNode }) {
     socket.on('connect_error', (err: Error) => store.setState({ error: err.message }));
 
     socket.on('room_created', (data: any) => {
-      store.setState({ roomId: data.roomId, playerId: data.playerId, phase: 'LOBBY' });
+      store.setState({ roomId: data.roomId, playerId: data.playerId, phase: 'READY' });
     });
 
     socket.on('player_joined', (data: any) => {
@@ -32,13 +32,21 @@ export function SocketProvider({ children }: { children: React.ReactNode }) {
       store.setState({
         roomId: data.roomId,
         phase: data.phase,
+        currentTurnIndex: data.currentTurnIndex,
         turnPlayerId: data.turnPlayerId,
         currentTrick: data.currentTrick,
-        tricks: data.tricks,
+        trickHistory: data.trickHistory,
+        currentTrickNumber: data.currentTrickNumber,
+        leadSuit: data.leadSuit,
+        isJokerCallActive: data.isJokerCallActive,
         kitty: data.kitty,
         giruda: data.giruda,
         ownerPlayerId: data.ownerPlayerId,
+        presidentIndex: data.presidentIndex,
+        friendDeclaration: data.friendDeclaration,
+        friendIndex: data.friendIndex,
         friendPlayerId: data.friendPlayerId,
+        passCount: data.passCount,
         currentBid: data.currentBid,
         bidLeader: data.bidLeader,
         players: data.players.map((p: any) => ({
@@ -48,7 +56,8 @@ export function SocketProvider({ children }: { children: React.ReactNode }) {
           isAi: p.isAi,
           hand: p.hidden ? p.hand.map((c: any) => ({ ...c, hidden: true })) : p.hand,
           handCount: p.handCount,
-          trickScore: p.trickScore,
+          collectedScoreCards: p.collectedScoreCards,
+          score: p.score,
           isFriend: p.isFriend,
           isOwner: p.isOwner,
           bid: p.bid,
@@ -63,11 +72,14 @@ export function SocketProvider({ children }: { children: React.ReactNode }) {
     socket.on('turn_complete', (data: any) => {
       const cur = store.getState();
       if (data.trick) cur.addTrick(data.trick);
-      store.setState({ turnPlayerId: data.winnerPlayerId });
+      store.setState({
+        turnPlayerId: data.winnerPlayerId,
+        ...(typeof data.trick?.winnerIndex === 'number' ? { currentTurnIndex: data.trick.winnerIndex } : {}),
+      });
     });
 
     socket.on('game_end', (data: any) => {
-      store.setState({ phase: 'ENDED' });
+      store.setState({ phase: 'GAME_OVER' });
     });
 
     socket.on('player_left', (data: any) => {

@@ -1,4 +1,5 @@
 export { GameEngine, createInitialGameState, type EngineOptions, type GamePhase } from './game-engine';
+export { ALLOWED_TRANSITIONS, InvalidPhaseTransitionError, canTransition, assertTransition } from './phase';
 export { createDeck, shuffleDeck, validateDeck } from './deck';
 export { dealCards } from './deal';
 export { validatePlay, determineTrickWinner } from './trick';
