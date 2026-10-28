@@ -1,7 +1,7 @@
 import { create } from 'zustand';
-import { io, Socket } from 'socket.io-client';
-
-const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL ?? 'http://localhost:3001';
+import type { Socket } from 'socket.io-client';
+import { createGameSocket } from '@/lib/socket';
+import type { GameErrorPayload } from '@/types/protocol';
 
 export type Card = {
   id: string;
@@ -131,11 +131,15 @@ export const useGameStore = create<GameState>((set) => ({
   error: null,
 
   setSocket: (socket) => set({ socket }),
-  connect: (url = BACKEND_URL) => {
-    const socket = io(url, { transports: ['websocket', 'polling'] });
+  connect: (url) => {
+    const socket = createGameSocket(url);
     socket.on('connect', () => set({ isConnected: true }));
     socket.on('disconnect', () => set({ isConnected: false }));
     socket.on('connect_error', (err) => set({ error: err.message }));
+    socket.on('game_error', (e: GameErrorPayload) => set({ error: e.message }));
+    socket.on('room_created', (data: { roomId: string; playerId: string }) =>
+      set({ roomId: data.roomId, playerId: data.playerId, phase: 'READY' }),
+    );
     set({ socket });
   },
   disconnect: () => set((s) => { s.socket?.disconnect(); return { socket: null, isConnected: false }; }),

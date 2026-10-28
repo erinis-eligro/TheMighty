@@ -1,9 +1,12 @@
 import { NestFactory } from '@nestjs/core';
 import { ValidationPipe } from '@nestjs/common';
 import { AppModule } from './app.module';
+import { CorsIoAdapter, getCorsOrigins } from './cors';
 
 async function bootstrap() {
-  const app = await NestFactory.create(AppModule, { cors: true });
+  const app = await NestFactory.create(AppModule);
+  app.enableCors({ origin: getCorsOrigins() });
+  app.useWebSocketAdapter(new CorsIoAdapter(app));
 
   app.useGlobalPipes(
     new ValidationPipe({

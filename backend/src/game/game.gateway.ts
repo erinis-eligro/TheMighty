@@ -7,13 +7,16 @@ import {
   SubscribeMessage,
   ConnectedSocket,
   MessageBody,
+  WsException,
 } from '@nestjs/websockets';
 import { Server, Socket } from 'socket.io';
-import { Logger, UsePipes, ValidationPipe } from '@nestjs/common';
+import { Logger, UseFilters, UsePipes, ValidationPipe } from '@nestjs/common';
 import { GameService } from './game.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { GAME_EVENTS } from './constants';
 import { SeatPosition } from './constants';
+import { GameWsExceptionFilter } from './game-ws-exception.filter';
+import { Ack, GAME_NAMESPACE, RoomAckData, RoomIdAckData } from './protocol';
 import { CreateRoomDto, JoinRoomDto, PlaceBidDto, PlayCardDto } from './dto/game.dto';
 import { Player } from './entities/game.entity';
 import {
@@ -32,10 +35,9 @@ interface ManagedRoom {
   aiTimers: Map<string, NodeJS.Timeout>;
 }
 
-@WebSocketGateway({
-  cors: { origin: '*' },
-  namespace: '/game',
-})
+// CORS origins are configured via the CORS_ORIGIN env var in main.ts (CorsIoAdapter).
+@WebSocketGateway({ namespace: GAME_NAMESPACE })
+@UseFilters(new GameWsExceptionFilter())
 export class GameGateway implements OnGatewayInit, OnGatewayConnection, OnGatewayDisconnect {
   @WebSocketServer() server!: Server;
   private readonly logger = new Logger(GameGateway.name);
@@ -74,8 +76,12 @@ export class GameGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
 
   private getManaged(roomId: string): ManagedRoom {
     const m = this.rooms.get(roomId);
-    if (!m) throw new Error(`Room ${roomId} not managed`);
+    if (!m) throw new WsException({ code: 'ROOM_NOT_FOUND', message: `Room ${roomId} not found` });
     return m;
+  }
+
+  private ok<T>(data: T): Ack<T> {
+    return { ok: true, data };
   }
 
   private publicState(managed: ManagedRoom, forPlayerId: string) {
@@ -241,7 +247,7 @@ export class GameGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
     this.broadcastState(this.getManaged(roomId));
 
     this.logger.log(`CREATE_ROOM: ${roomId} human=${humanId}`);
-    return { event: GAME_EVENTS.ROOM_CREATED, data: { roomId, playerId: humanId } };
+    return this.ok<RoomAckData>({ roomId, playerId: humanId });
   }
 
   @SubscribeMessage(GAME_EVENTS.JOIN_ROOM)
@@ -259,7 +265,7 @@ export class GameGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
       players: managed.engine.state.players,
     });
     this.broadcastState(managed);
-    return { event: GAME_EVENTS.ROOM_JOINED, data: { roomId: dto.roomId, playerId: human?.id ?? '' } };
+    return this.ok<RoomAckData>({ roomId: dto.roomId, playerId: human?.id ?? '' });
   }
 
   @SubscribeMessage(GAME_EVENTS.LEAVE_ROOM)
@@ -275,14 +281,14 @@ export class GameGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
       roomId: data.roomId,
       playerId: data.playerId,
     });
-    return { event: GAME_EVENTS.PLAYER_LEFT, data: { roomId: data.roomId, playerId: data.playerId } };
+    return this.ok<RoomAckData>({ roomId: data.roomId, playerId: data.playerId });
   }
 
   @SubscribeMessage(GAME_EVENTS.GET_STATE)
   handleGetState(@ConnectedSocket() client: Socket, @MessageBody() data: { roomId: string }) {
     const managed = this.getManaged(data.roomId);
     client.emit(GAME_EVENTS.STATE_SYNC, this.publicState(managed, client.id));
-    return { event: GAME_EVENTS.STATE_SYNC, data: { roomId: data.roomId } };
+    return this.ok<RoomIdAckData>({ roomId: data.roomId });
   }
 
   @SubscribeMessage(GAME_EVENTS.START_GAME)
@@ -292,7 +298,7 @@ export class GameGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
     const engine = managed.engine;
 
     if (engine.state.phase !== 'READY') {
-      throw new Error('Game already started');
+      throw new WsException({ code: 'GAME_ALREADY_STARTED', message: 'Game already started' });
     }
 
     // The engine owns all phase transitions: READY -> DEALING -> BIDDING.
@@ -309,7 +315,7 @@ export class GameGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
     this.broadcastState(managed);
     this.scheduleAiTurn(data.roomId);
 
-    return { event: GAME_EVENTS.GAME_STARTED, data: { roomId: data.roomId } };
+    return this.ok<RoomIdAckData>({ roomId: data.roomId });
   }
 
   @SubscribeMessage(GAME_EVENTS.PLACE_BID)
@@ -319,8 +325,8 @@ export class GameGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
     const engine = managed.engine;
 
     const player = engine.state.players.find((p) => p.id === dto.playerId);
-    if (!player || player.isAi) throw new Error('Only human can place bid here');
-    if (engine.state.players[engine.state.currentTurnIndex]?.id !== player.id) throw new Error('Not your turn');
+    if (!player || player.isAi) throw new WsException({ code: 'INVALID_PLAYER', message: 'Only human can place bid here' });
+    if (engine.state.players[engine.state.currentTurnIndex]?.id !== player.id) throw new WsException({ code: 'NOT_YOUR_TURN', message: 'Not your turn' });
 
     const isPass = dto.pass === true;
     engine.placeBid(dto.playerId, dto.bid, isPass);
@@ -337,7 +343,7 @@ export class GameGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
     // For MVP, advance to next turn; if AI, let it act.
     this.scheduleAiTurn(dto.roomId);
 
-    return { event: GAME_EVENTS.BID_PLACED, data: { roomId: dto.roomId, playerId: dto.playerId } };
+    return this.ok<RoomAckData>({ roomId: dto.roomId, playerId: dto.playerId });
   }
 
   @SubscribeMessage(GAME_EVENTS.PLAY_CARD)
@@ -347,8 +353,8 @@ export class GameGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
     const engine = managed.engine;
 
     const player = engine.state.players.find((p) => p.id === dto.playerId);
-    if (!player || player.isAi) throw new Error('Only human can play card');
-    if (engine.state.players[engine.state.currentTurnIndex]?.id !== player.id) throw new Error('Not your turn');
+    if (!player || player.isAi) throw new WsException({ code: 'INVALID_PLAYER', message: 'Only human can play card' });
+    if (engine.state.players[engine.state.currentTurnIndex]?.id !== player.id) throw new WsException({ code: 'NOT_YOUR_TURN', message: 'Not your turn' });
 
     const result = engine.playCard(dto.playerId, dto.cardId);
 
@@ -397,11 +403,11 @@ export class GameGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
           });
         });
       }
-      return { event: GAME_EVENTS.GAME_END, data: { roomId: dto.roomId } };
+      return this.ok<RoomAckData>({ roomId: dto.roomId, playerId: dto.playerId });
     }
 
     this.scheduleAiTurn(dto.roomId);
 
-    return { event: GAME_EVENTS.CARD_PLAYED, data: { roomId: dto.roomId, playerId: dto.playerId } };
+    return this.ok<RoomAckData>({ roomId: dto.roomId, playerId: dto.playerId });
   }
 }
