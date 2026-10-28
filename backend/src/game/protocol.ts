@@ -68,6 +68,10 @@ export interface PlayCardRequest {
   roomId: string;
   playerId: string;
   cardId: string;
+  /** Leader declares the joker call (leading with the joker-call card). */
+  jokerCall?: boolean;
+  /** Suit named when leading with the joker. */
+  jokerLeadSuit?: 'SPADE' | 'DIAMOND' | 'HEART' | 'CLUB';
 }
 
 type AckFn<T> = (res: Ack<T>) => void;

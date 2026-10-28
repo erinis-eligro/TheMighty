@@ -29,9 +29,12 @@ export const KITTY_SIZE = 3;
 export const PLAYER_COUNT = 5;
 export const DECK_SIZE = 53;
 
-export const JOKER_STRENGTH = 100;
-export const MIGHTY_STRENGTH = 90;
+// Mighty beats joker, joker beats giruda, giruda beats the lead suit.
+export const MIGHTY_STRENGTH = 100;
+export const JOKER_STRENGTH = 90;
 export const GIRUDA_BASE_STRENGTH = 50;
+/** Strength of a joker that has no power (joker call / first / last trick): below any other card. */
+export const POWERLESS_JOKER_STRENGTH = -1;
 
 export function isJokerCard(card: { suit: string; isJoker?: boolean }): boolean {
   return card.suit === 'JOKER' || card.isJoker === true;
@@ -71,4 +74,21 @@ export function isJokerCallCard(card: { suit: string; rank: string }, giruda: st
 
 export function cardBaseStrength(card: { rank: string }): number {
   return RANK_STRENGTH[card.rank as Rank] ?? 0;
+}
+
+/**
+ * The joker has no power (it is the weakest card of the trick) on the first and
+ * last trick and in a trick where the joker call was declared.
+ * `trickNumber` is the 1-based number of the trick, not a per-player turn.
+ */
+export function isJokerPowerless({
+  trickNumber,
+  totalTricks,
+  isJokerCallActive,
+}: {
+  trickNumber: number;
+  totalTricks: number;
+  isJokerCallActive: boolean;
+}): boolean {
+  return isJokerCallActive || trickNumber === 1 || trickNumber === totalTricks;
 }
