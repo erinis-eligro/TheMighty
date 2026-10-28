@@ -7,6 +7,13 @@ import { validateBid, bidRank } from './bidding';
 import { calculateTrickPoints, evaluateGameResult } from './score';
 import { getMightyCard, getJokerCallCard, isJokerCallCard, isPointCard, TOTAL_TRICKS, MAX_BID } from './rules';
 import { assertTransition } from './phase';
+import {
+  FriendReveal,
+  validateFriendDeclaration,
+  resolveFriendTargetCard,
+  isFriendTargetCard,
+  findFriendHolder,
+} from './friend';
 
 export type { GamePhase };
 
@@ -25,6 +32,13 @@ export class GameEngine {
   private _trickNumber = 0;
   private teamPoints = 0;
   private bidScore = 0;
+  /**
+   * Seat index of the player the friend condition points at. Server-side only:
+   * it is never sent to clients; `state.friendIndex` is set once it is revealed.
+   * Stays null for NO_FRIEND, for a condition the president satisfies himself,
+   * and for FIRST_TRICK until the first trick is resolved.
+   */
+  private friendHolderIndex: number | null = null;
 
   get mightyCard() {
     return this._mightyCard;
@@ -64,6 +78,7 @@ export class GameEngine {
       friendDeclaration: null,
       friendIndex: null,
       friendPlayerId: undefined,
+      friendRevealed: false,
       passCount: 0,
       currentBid: 0,
       highestBid: null,
@@ -130,6 +145,11 @@ export class GameEngine {
     this.state.passCount = 0;
     this.state.presidentIndex = null;
     this.state.ownerPlayerId = '';
+    this.state.friendDeclaration = null;
+    this.state.friendIndex = null;
+    this.state.friendPlayerId = undefined;
+    this.state.friendRevealed = false;
+    this.friendHolderIndex = null;
     this.bidScore = 0;
     this.setTurn(FIRST_BIDDER_INDEX);
 
@@ -268,32 +288,100 @@ export class GameEngine {
     this.transition('FRIEND_SELECTION');
   }
 
-  /** FRIEND_SELECTION -> TRICK_PLAYING. The president leads the first trick. */
-  selectFriend(declaration: FriendDeclaration, friendId?: string): void {
+  /** Whether the player is the (still hidden or revealed) friend of the president. Server-side knowledge only. */
+  isFriend(playerId: string): boolean {
+    const idx = this.indexOfPlayer(playerId);
+    return idx >= 0 && idx === this.friendHolderIndex;
+  }
+
+  /**
+   * FRIEND_SELECTION -> TRICK_PLAYING. The president declares a friend
+   * condition (mighty / joker / a specific card / first trick / no friend) and
+   * leads the first trick.
+   *
+   * The server works out who the friend is; `friendIndex` stays null until the
+   * friend is revealed (when the card is played, or when the first trick is
+   * won). The friend is revealed immediately, with no friend on the president's
+   * team, when the condition is NO_FRIEND, when the president holds the
+   * declared card himself, or when nobody holds it (it was discarded).
+   *
+   * Validation happens before any state is touched.
+   */
+  declareFriend(
+    playerId: string,
+    declaration: { type?: string; suit?: string; rank?: string }
+  ): { declaration: FriendDeclaration; friendRevealed?: FriendReveal } {
     if (this.state.phase !== 'FRIEND_SELECTION') {
       throw new Error('Not in friend selection phase');
     }
+    const playerIndex = this.indexOfPlayer(playerId);
+    if (playerIndex < 0) {
+      throw new Error('Player not found');
+    }
+    if (playerIndex !== this.state.presidentIndex) {
+      throw new Error('Only the president can declare the friend');
+    }
+    const validation = validateFriendDeclaration(declaration);
+    if (!validation.valid) {
+      throw new Error(validation.reason ?? 'invalid_friend_declaration');
+    }
 
-    const friendIndex = friendId ? this.indexOfPlayer(friendId) : -1;
-    if (friendId && friendIndex < 0) {
-      throw new Error('Friend player not found');
+    const normalized = (
+      declaration.type === 'CARD'
+        ? { type: 'CARD', suit: declaration.suit, rank: declaration.rank }
+        : { type: declaration.type }
+    ) as FriendDeclaration;
+
+    let holder: number | null = null;
+    let immediate: FriendReveal['reason'] | null = null;
+    if (normalized.type === 'NO_FRIEND') {
+      immediate = 'NO_FRIEND';
+    } else if (normalized.type !== 'FIRST_TRICK') {
+      const target = resolveFriendTargetCard(normalized, this.state.giruda as string)!;
+      const found = findFriendHolder(
+        this.state.players.map((p) => p.hand),
+        target
+      );
+      if (found < 0) {
+        immediate = 'CARD_NOT_IN_PLAY';
+      } else if (found === playerIndex) {
+        immediate = 'PRESIDENT_HOLDS_CARD';
+      } else {
+        holder = found;
+      }
     }
 
     this.transition('TRICK_PLAYING');
-    this.state.friendDeclaration = declaration;
-    this.state.friendIndex = friendIndex >= 0 ? friendIndex : null;
-    this.state.friendPlayerId = friendId;
-    if (friendId) {
-      this.state.players = this.state.players.map((p) =>
-        p.id === friendId ? { ...p, isFriend: true } : p
-      );
-    }
+    this.state.friendDeclaration = normalized;
+    this.state.friendIndex = null;
+    this.state.friendPlayerId = undefined;
+    this.state.friendRevealed = false;
+    this.friendHolderIndex = holder;
     this.state.currentTrickNumber = 1;
     this._trickNumber = 1;
     this.setTurn(this.state.presidentIndex ?? FIRST_BIDDER_INDEX);
+
+    return {
+      declaration: normalized,
+      friendRevealed: immediate ? this.revealFriend(null, immediate) : undefined,
+    };
   }
 
-  playCard(playerId: string, cardId: string): { valid: boolean; trickComplete?: boolean; trick?: Trick; points?: number } {
+  /** Publishes the friend (or the fact that the president plays without one). */
+  private revealFriend(friendIndex: number | null, reason: FriendReveal['reason']): FriendReveal {
+    this.state.friendRevealed = true;
+    if (friendIndex !== null) {
+      this.state.friendIndex = friendIndex;
+      this.state.friendPlayerId = this.state.players[friendIndex].id;
+      this.state.players = this.state.players.map((p, i) => (i === friendIndex ? { ...p, isFriend: true } : p));
+    }
+    return { friendPlayerId: this.state.friendPlayerId ?? null, friendIndex, reason };
+  }
+
+  playCard(
+    playerId: string,
+    cardId: string
+  ): { valid: boolean; trickComplete?: boolean; trick?: Trick; points?: number; friendRevealed?: FriendReveal } {
     if (this.state.phase !== 'TRICK_PLAYING') {
       throw new Error('Not in playing phase');
     }
@@ -347,17 +435,34 @@ export class GameEngine {
 
     this.state.currentTrick.cards.push({ playerId, playerIndex, card });
 
+    // The friend is revealed the moment the declared card is played.
+    let friendRevealed: FriendReveal | undefined;
+    const declaration = this.state.friendDeclaration;
+    if (!this.state.friendRevealed && playerIndex === this.friendHolderIndex && declaration) {
+      const target = resolveFriendTargetCard(declaration, this.state.giruda as string);
+      if (target && isFriendTargetCard(card, target)) {
+        friendRevealed = this.revealFriend(playerIndex, 'CARD_PLAYED');
+      }
+    }
+
     if (this.state.currentTrick.cards.length === this.state.players.length) {
-      return this.resolveTrick();
+      const resolved = this.resolveTrick();
+      return { ...resolved, friendRevealed: friendRevealed ?? resolved.friendRevealed };
     }
 
     this.setTurn(playerIndex + 1);
 
-    return { valid: true, trickComplete: false };
+    return { valid: true, trickComplete: false, friendRevealed };
   }
 
   /** TRICK_PLAYING -> TRICK_RESOLVED -> (TRICK_PLAYING | ROUND_SCORING -> GAME_OVER). */
-  private resolveTrick(): { valid: boolean; trickComplete: true; trick: Trick; points: number } {
+  private resolveTrick(): {
+    valid: boolean;
+    trickComplete: true;
+    trick: Trick;
+    points: number;
+    friendRevealed?: FriendReveal;
+  } {
     const trick = this.state.currentTrick!;
     this.transition('TRICK_RESOLVED');
 
@@ -380,9 +485,20 @@ export class GameEngine {
       winner.score = winner.collectedScoreCards.length;
     }
 
-    const isOwnerTeam =
-      result.winnerPlayerId === this.state.ownerPlayerId ||
-      result.winnerPlayerId === this.state.friendPlayerId;
+    // First-trick friend: whoever wins trick 1 (other than the president) is the friend.
+    let friendRevealed: FriendReveal | undefined;
+    if (this.state.friendDeclaration?.type === 'FIRST_TRICK' && !this.state.friendRevealed) {
+      if (winnerIndex === this.state.presidentIndex) {
+        friendRevealed = this.revealFriend(null, 'PRESIDENT_WON_FIRST_TRICK');
+      } else {
+        this.friendHolderIndex = winnerIndex;
+        friendRevealed = this.revealFriend(winnerIndex, 'FIRST_TRICK_WON');
+      }
+    }
+
+    // Team membership uses the server-side friend, which may not be revealed yet.
+    // Without a friend (NO_FRIEND etc.) only the president's own tricks count.
+    const isOwnerTeam = winnerIndex === this.state.presidentIndex || winnerIndex === this.friendHolderIndex;
 
     if (isOwnerTeam) {
       this.teamPoints += result.points;
@@ -407,6 +523,7 @@ export class GameEngine {
       trickComplete: true,
       trick,
       points: result.points,
+      friendRevealed,
     };
   }
 

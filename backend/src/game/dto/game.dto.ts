@@ -39,6 +39,31 @@ export class PlaceBidDto {
   pass?: boolean;
 }
 
+export class DeclareFriendDto {
+  @IsString()
+  @IsUUID()
+  roomId!: string;
+
+  @IsString()
+  @IsUUID()
+  playerId!: string;
+
+  /** NO_FRIEND | FIRST_TRICK | MIGHTY | JOKER | CARD */
+  @IsString()
+  @IsIn(['NO_FRIEND', 'FIRST_TRICK', 'MIGHTY', 'JOKER', 'CARD'])
+  type!: string;
+
+  /** Required when type is CARD. */
+  @IsString()
+  @IsOptional()
+  suit?: string;
+
+  /** Required when type is CARD. */
+  @IsString()
+  @IsOptional()
+  rank?: string;
+}
+
 export class PlayCardDto {
   @IsString()
   @IsUUID()

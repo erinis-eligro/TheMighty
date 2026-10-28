@@ -17,13 +17,15 @@ import { GAME_EVENTS } from './constants';
 import { SeatPosition } from './constants';
 import { GameWsExceptionFilter } from './game-ws-exception.filter';
 import { Ack, GAME_NAMESPACE, RoomAckData, RoomIdAckData } from './protocol';
-import { CreateRoomDto, JoinRoomDto, PlaceBidDto, PlayCardDto } from './dto/game.dto';
+import { CreateRoomDto, DeclareFriendDto, JoinRoomDto, PlaceBidDto, PlayCardDto } from './dto/game.dto';
 import { Player } from './entities/game.entity';
 import {
   GameEngine,
   createInitialGameState,
   selectBid,
   selectCardToPlay,
+  selectFriendDeclaration,
+  type FriendReveal,
   generateAiName,
 } from './core';
 import { Role, Giruda } from '@prisma/client';
@@ -103,6 +105,7 @@ export class GameGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
       friendDeclaration: engine.state.friendDeclaration,
       friendIndex: engine.state.friendIndex,
       friendPlayerId: engine.state.friendPlayerId,
+      friendRevealed: engine.state.friendRevealed,
       passCount: engine.state.passCount,
       currentBid: engine.state.currentBid,
       highestBid: engine.state.highestBid,
@@ -133,7 +136,13 @@ export class GameGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
   private scheduleAiTurn(roomId: string, delayMs = 1500) {
     const managed = this.getManaged(roomId);
     const engine = managed.engine;
-    if (engine.state.phase !== 'BIDDING' && engine.state.phase !== 'TRICK_PLAYING') return;
+    if (
+      engine.state.phase !== 'BIDDING' &&
+      engine.state.phase !== 'FRIEND_SELECTION' &&
+      engine.state.phase !== 'TRICK_PLAYING'
+    ) {
+      return;
+    }
     const turnPlayer = engine.state.players[engine.state.currentTurnIndex];
     if (!turnPlayer || !turnPlayer.isAi) return;
 
@@ -153,6 +162,13 @@ export class GameGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
             giruda: decision.giruda ?? undefined,
           });
           this.emitBidResult(roomId, turnPlayer.id, decision.bid, decision.giruda, isPass, result);
+        } else if (engine.state.phase === 'FRIEND_SELECTION') {
+          const decision = selectFriendDeclaration({
+            hand: turnPlayer.hand,
+            giruda: engine.state.giruda as string,
+          });
+          const result = engine.declareFriend(turnPlayer.id, decision);
+          this.emitFriendDeclared(roomId, turnPlayer.id, result);
         } else if (engine.state.phase === 'TRICK_PLAYING') {
           const currentTrickPlays = engine.state.currentTrick?.cards ?? [];
           const winnerOfCurrent = currentTrickPlays.length > 0 ? currentTrickPlays[currentTrickPlays.length - 1] : null;
@@ -177,6 +193,7 @@ export class GameGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
             playerId: turnPlayer.id,
             cardId: decision.cardId,
           });
+          if (result.friendRevealed) this.emitFriendRevealed(roomId, result.friendRevealed);
           if (result.trickComplete && result.trick) {
             this.server.to(roomId).emit(GAME_EVENTS.TURN_COMPLETE, {
               roomId,
@@ -213,6 +230,24 @@ export class GameGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
         presidentPlayerId: result.completed ? result.bidLeader : null,
       });
     }
+  }
+
+  /** Public announcement of the declared condition; who the friend is stays hidden. */
+  private emitFriendDeclared(
+    roomId: string,
+    playerId: string,
+    result: { declaration: unknown; friendRevealed?: FriendReveal }
+  ) {
+    this.server.to(roomId).emit(GAME_EVENTS.FRIEND_DECLARED, {
+      roomId,
+      playerId,
+      declaration: result.declaration,
+    });
+    if (result.friendRevealed) this.emitFriendRevealed(roomId, result.friendRevealed);
+  }
+
+  private emitFriendRevealed(roomId: string, reveal: FriendReveal) {
+    this.server.to(roomId).emit(GAME_EVENTS.FRIEND_REVEALED, { roomId, ...reveal });
   }
 
   @SubscribeMessage(GAME_EVENTS.CREATE_ROOM)
@@ -359,6 +394,35 @@ export class GameGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
     return this.ok<RoomAckData>({ roomId: dto.roomId, playerId: dto.playerId });
   }
 
+  @SubscribeMessage(GAME_EVENTS.DECLARE_FRIEND)
+  @UsePipes(new ValidationPipe({ whitelist: true, transform: true }))
+  handleDeclareFriend(@ConnectedSocket() client: Socket, @MessageBody() dto: DeclareFriendDto) {
+    const managed = this.getManaged(dto.roomId);
+    const engine = managed.engine;
+
+    // Identity is decided by the server: the socket must be the one bound to dto.playerId.
+    const player = engine.state.players.find((p) => p.id === dto.playerId);
+    if (!player || player.isAi || managed.socketByPlayerId.get(dto.playerId) !== client.id) {
+      throw new WsException({ code: 'INVALID_PLAYER', message: 'Only the human president can declare the friend' });
+    }
+    if (engine.state.phase !== 'FRIEND_SELECTION') {
+      throw new WsException({ code: 'INVALID_PHASE', message: 'Not in friend selection phase' });
+    }
+    if (engine.state.ownerPlayerId !== player.id) {
+      throw new WsException({ code: 'NOT_PRESIDENT', message: 'Only the president can declare the friend' });
+    }
+
+    const result = engine.declareFriend(dto.playerId, { type: dto.type, suit: dto.suit, rank: dto.rank });
+
+    this.emitFriendDeclared(dto.roomId, dto.playerId, result);
+    this.broadcastState(managed);
+
+    // The president leads first; if that is an AI (never for a human president) it acts next.
+    this.scheduleAiTurn(dto.roomId);
+
+    return this.ok<RoomAckData>({ roomId: dto.roomId, playerId: dto.playerId });
+  }
+
   @SubscribeMessage(GAME_EVENTS.PLAY_CARD)
   @UsePipes(new ValidationPipe({ whitelist: true, transform: true }))
   handlePlayCard(@ConnectedSocket() client: Socket, @MessageBody() dto: PlayCardDto) {
@@ -376,6 +440,7 @@ export class GameGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
       playerId: dto.playerId,
       cardId: dto.cardId,
     });
+    if (result.friendRevealed) this.emitFriendRevealed(dto.roomId, result.friendRevealed);
 
     if (result.trickComplete && result.trick) {
       this.server.to(dto.roomId).emit(GAME_EVENTS.TURN_COMPLETE, {

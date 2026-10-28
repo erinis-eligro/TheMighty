@@ -23,8 +23,17 @@ export {
   DECK_SIZE,
 } from './rules';
 export {
+  validateFriendDeclaration,
+  resolveFriendTargetCard,
+  isFriendTargetCard,
+  findFriendHolder,
+  FRIEND_TYPES,
+  type FriendReveal,
+} from './friend';
+export {
   selectBid,
   selectCardToPlay,
+  selectFriendDeclaration,
   generateAiName,
   type AiBidDecision,
   type AiPlayDecision,
