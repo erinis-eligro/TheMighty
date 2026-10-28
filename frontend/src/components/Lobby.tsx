@@ -2,30 +2,36 @@
 
 import { motion } from 'framer-motion';
 import { useGameStore } from '@/store/useGameStore';
+import { emitWithAck } from '@/lib/socket';
+import type { RoomAckData } from '@/types/protocol';
 
 export function Lobby() {
-  const { roomId, playerId, username, isConnected, error, setRoom, setPlayers } = useGameStore();
+  const { roomId, playerId, username, isConnected, error, setRoom, setError } = useGameStore();
   const socket = useGameStore((s) => s.socket);
 
-  const createRoom = () => {
+  const createRoom = async () => {
     const name = prompt('닉네임을 입력하세요') || '플레이어';
     if (!socket) return;
-    socket.emit('create_room', { username: name }, (data: any) => {
-      if (data?.roomId) {
-        setRoom(data.roomId, data.playerId, name);
-      }
-    });
+    const res = await emitWithAck<RoomAckData>(socket, 'create_room', { username: name });
+    if (res.ok) {
+      setError(null);
+      setRoom(res.data.roomId, res.data.playerId, name);
+    } else {
+      setError(res.error.message);
+    }
   };
 
-  const joinRoom = () => {
+  const joinRoom = async () => {
     const room = prompt('방 코드를 입력하세요');
     const name = prompt('닉네임을 입력하세요') || '플레이어';
     if (!socket || !room) return;
-    socket.emit('join_room', { roomId: room, username: name }, (data: any) => {
-      if (data?.roomId) {
-        setRoom(data.roomId, data.playerId, name);
-      }
-    });
+    const res = await emitWithAck<RoomAckData>(socket, 'join_room', { roomId: room, username: name });
+    if (res.ok) {
+      setError(null);
+      setRoom(res.data.roomId, res.data.playerId, name);
+    } else {
+      setError(res.error.message);
+    }
   };
 
   return (

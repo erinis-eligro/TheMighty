@@ -40,3 +40,7 @@ docker compose down -v
 - PostgreSQL 데이터는 `mighty_pg_data` 볼륨에 영구 저장됩니다.
 - 백엔드 컨테이너는 시작 시 `npx prisma migrate deploy` 를 자동 실행하므로, 빈 DB에서도 `docker compose up` 만으로 스키마가 생성됩니다.
 - 스키마를 변경하면 `cd backend && npx prisma migrate dev --name <name>` 으로 마이그레이션을 만들어 `backend/prisma/migrations` 에 함께 커밋하세요.
+
+## 환경변수
+- `CORS_ORIGIN` (backend): 허용할 프론트엔드 origin. 쉼표로 여러 개 지정 가능, `*` 는 전체 허용. 기본값 `http://localhost:3000`.
+- `NEXT_PUBLIC_BACKEND_URL` (frontend): 백엔드 주소. 소켓은 이 주소의 `/game` 네임스페이스로 연결합니다.

@@ -2,17 +2,14 @@
 
 import { useEffect } from 'react';
 import { useGameStore } from '@/store/useGameStore';
-
-const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL ?? 'http://localhost:3001';
+import { createGameSocket } from '@/lib/socket';
 
 export function SocketProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     const store = useGameStore;
     let socket: any;
     try {
-      socket = require('socket.io-client').io(BACKEND_URL, {
-        transports: ['websocket', 'polling'],
-      });
+      socket = createGameSocket();
     } catch {
       return;
     }
