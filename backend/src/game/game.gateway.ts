@@ -34,6 +34,8 @@ interface ManagedRoom {
   humanPlayerId: string;
   socketByPlayerId: Map<string, string>;
   aiTimers: Map<string, NodeJS.Timeout>;
+  /** True once game_end was sent and the result was persisted (guards against double saves). */
+  finished?: boolean;
 }
 
 // CORS origins are configured via the CORS_ORIGIN env var in main.ts (CorsIoAdapter).
@@ -108,6 +110,7 @@ export class GameGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
       friendDeclaration: engine.state.friendDeclaration,
       friendIndex: engine.state.friendIndex,
       friendPlayerId: engine.state.friendPlayerId,
+      result: engine.state.phase === 'GAME_OVER' ? (engine.state.result ?? null) : null,
       passCount: engine.state.passCount,
       currentBid: engine.state.currentBid,
       highestBid: engine.state.highestBid,
@@ -209,11 +212,51 @@ export class GameGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
         this.logger.error(`AI turn error: ${(e as Error).message}`);
       } finally {
         this.broadcastState(managed);
+        this.finishGameIfOver(roomId);
         this.scheduleAiTurn(roomId);
       }
     }, delayMs);
 
     managed.aiTimers.set(turnPlayer.id, timer);
+  }
+
+  /**
+   * Called after every card (human or AI). Once the engine reached GAME_OVER it
+   * announces the scored result, stops the AI timers and saves the human's record.
+   */
+  private finishGameIfOver(roomId: string): void {
+    const managed = this.rooms.get(roomId);
+    if (!managed || managed.finished) return;
+    const engine = managed.engine;
+    if (engine.state.phase !== 'GAME_OVER') return;
+    managed.finished = true;
+
+    const result = engine.getResult();
+    this.clearAiTimers(roomId);
+
+    const human = engine.state.players.find((p) => p.id === managed.humanPlayerId);
+    const humanScore = result.players.find((p) => p.playerId === managed.humanPlayerId);
+    // The human wins together with his team: owner team wins -> OWNER/FRIEND win, OPPOSER lose.
+    const humanWon = humanScore ? (humanScore.role === 'OPPOSER' ? !result.isWin : result.isWin) : result.isWin;
+    this.server.to(roomId).emit(GAME_EVENTS.GAME_END, {
+      roomId,
+      ...result,
+      humanRole: humanScore?.role ?? null,
+      humanWon,
+    });
+
+    if (!human || !humanScore) return;
+
+    this.gameService
+      .saveGameHistory(
+        human.username,
+        Role[humanScore.role],
+        humanWon,
+        result.bidScore,
+        result.giruda as Giruda,
+        result.teamPoints
+      )
+      .catch((e: Error) => this.logger.error(`Failed to save game history for ${human.username}: ${e.message}`, e.stack));
   }
 
   private emitBidResult(
@@ -456,37 +499,7 @@ export class GameGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
 
     this.broadcastState(managed);
 
-    if (engine.state.phase === 'GAME_OVER') {
-      const { isWin, teamPoints, bidScore } = engine.getResult();
-      this.server.to(dto.roomId).emit(GAME_EVENTS.GAME_END, {
-        roomId: dto.roomId,
-        isWin,
-        teamPoints,
-        bidScore,
-      });
-      this.clearAiTimers(dto.roomId);
-
-      const human = engine.state.players.find((p) => p.id === managed.humanPlayerId);
-      if (human) {
-        this.prisma.user.upsert({
-          where: { username: human.username },
-          update: {},
-          create: { username: human.username },
-        }).then((u) => {
-          this.prisma.gameHistory.create({
-            data: {
-              user_id: u.id,
-              role: Role.OWNER,
-              is_win: isWin,
-              bid_score: bidScore,
-              team_points: teamPoints,
-              giruda: engine.state.giruda as Giruda,
-            },
-          });
-        });
-      }
-      return this.ok<RoomAckData>({ roomId: dto.roomId, playerId: dto.playerId });
-    }
+    this.finishGameIfOver(dto.roomId);
 
     this.scheduleAiTurn(dto.roomId);
 

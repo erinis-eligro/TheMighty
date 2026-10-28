@@ -3,7 +3,7 @@ export { ALLOWED_TRANSITIONS, InvalidPhaseTransitionError, canTransition, assert
 export { createDeck, shuffleDeck, validateDeck } from './deck';
 export { dealCards } from './deal';
 export { validatePlay, determineTrickWinner } from './trick';
-export { calculateTrickPoints, evaluateGameResult } from './score';
+export { calculateTrickPoints, evaluateGameResult, scoreRound, getPlayerRole } from './score';
 export { validateBid, bidRank, lowestValidScore, BID_GIRUDAS, type BidValidation } from './bidding';
 export {
   getMightyCard,

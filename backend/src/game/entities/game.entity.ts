@@ -73,6 +73,31 @@ export type FriendDeclaration =
   | { type: 'JOKER' }
   | { type: 'CARD'; suit: Suit; rank: Card['rank'] };
 
+/** Role of a player in a finished round. Values match the Prisma `Role` enum. */
+export type PlayerRole = 'OWNER' | 'FRIEND' | 'OPPOSER';
+
+export interface PlayerRoundScore {
+  playerId: string;
+  role: PlayerRole;
+  /** Score cards (10, J, Q, K, A) this player collected. */
+  points: number;
+}
+
+/** Outcome of ROUND_SCORING, computed by the engine once all tricks are resolved. */
+export interface RoundResult {
+  isWin: boolean;
+  bidScore: number;
+  giruda: Suit | 'NO_GIRUDA';
+  /** Score cards collected by the owner team (president + friend). */
+  teamPoints: number;
+  /** Score cards collected by the opposition. */
+  opponentPoints: number;
+  ownerPlayerId: string;
+  /** Null for no-friend (or when the president is his own friend). */
+  friendPlayerId: string | null;
+  players: PlayerRoundScore[];
+}
+
 export interface GameState {
   roomId: string;
   phase: GamePhase;
@@ -104,6 +129,8 @@ export interface GameState {
   highestBid: Bid | null;
   bidLeader?: string;
   players: Player[];
+  /** Set by ROUND_SCORING; null while the game is in progress. */
+  result?: RoundResult | null;
 }
 
 export interface Room {

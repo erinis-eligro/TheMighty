@@ -51,7 +51,7 @@ export default function GamePage({ params }: { params: { roomId: string } }) {
 
     socket.on('game_end', (data: any) => {
       setPhase('GAME_OVER');
-      alert(`게임 종료! ${data.isWin ? '승리' : '패배'} (팀점수 ${data.teamPoints} / 비딩 ${data.bidScore})`);
+      alert(`게임 종료! ${data.humanWon ? '승리' : '패배'} (주공팀 ${data.teamPoints} / 야당 ${data.opponentPoints} / 비딩 ${data.bidScore})`);
     });
 
     socket.emit('start_game', { roomId });
