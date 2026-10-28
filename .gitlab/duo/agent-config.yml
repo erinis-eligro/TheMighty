@@ -1,0 +1,19 @@
+# Duo Agent Platform flow execution settings.
+# NOTE: 이 파일은 기본 브랜치(develop)에 있는 내용만 적용된다.
+image: node:20-bookworm
+
+setup_script:
+  - cd backend && npm ci && npx prisma generate
+  - cd frontend && npm ci
+
+cache:
+  paths:
+    - backend/node_modules/
+    - frontend/node_modules/
+    - .npm/
+
+network_policy:
+  include_recommended_allowed: true
+  allowed_domains:
+    - registry.npmjs.org
+    - binaries.prisma.sh
