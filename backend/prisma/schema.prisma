@@ -1,0 +1,47 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  OWNER   // 주공
+  FRIEND  // 프렌드
+  OPPOSER // 야당
+}
+
+enum Giruda {
+  SPADE   // ♠
+  DIAMOND // ◆
+  HEART   // ♥
+  CLUB    // ♣
+  NO_GIRUDA // 노기루다
+}
+
+model User {
+  id            String    @id @default(uuid()) @db.Uuid
+  username      String    @unique @db.VarChar(50)
+  total_games   Int       @default(0)
+  win_count     Int       @default(0)
+  lose_count    Int       @default(0)
+  created_at    DateTime  @default(now()) @db.Timestamptz(6)
+  updated_at    DateTime  @updatedAt @db.Timestamptz(6)
+  game_histories GameHistory[]
+}
+
+model GameHistory {
+  id          String   @id @default(uuid()) @db.Uuid
+  user        User     @relation(fields: [user_id], references: [id], onDelete: Cascade)
+  user_id     String   @db.Uuid
+  role        Role
+  is_win      Boolean
+  bid_score   Int
+  giruda      Giruda
+  created_at  DateTime @default(now()) @db.Timestamptz(6)
+
+  @@index([user_id])
+  @@index([created_at])
+}
