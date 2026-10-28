@@ -2,7 +2,7 @@ import { SeatPosition } from '../constants';
 
 export interface Card {
   suit: 'SPADE' | 'DIAMOND' | 'HEART' | 'CLUB' | 'JOKER';
-  rank: '3' | '4' | '5' | '6' | '7' | '8' | '9' | '10' | 'J' | 'Q' | 'K' | 'A' | '2';
+  rank: '2' | '3' | '4' | '5' | '6' | '7' | '8' | '9' | '10' | 'J' | 'Q' | 'K' | 'A';
   isJoker: boolean;
   id: string;
 }
