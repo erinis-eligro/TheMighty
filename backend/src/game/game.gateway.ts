@@ -105,6 +105,7 @@ export class GameGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
       friendPlayerId: engine.state.friendPlayerId,
       passCount: engine.state.passCount,
       currentBid: engine.state.currentBid,
+      highestBid: engine.state.highestBid,
       bidLeader: engine.state.bidLeader,
       players: engine.state.players.map((p) => ({
         id: p.id,
@@ -118,6 +119,7 @@ export class GameGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
         isFriend: p.isFriend,
         isOwner: p.isOwner,
         bid: p.bid,
+        hasPassed: p.hasPassed,
       })),
     };
   }
@@ -143,15 +145,14 @@ export class GameGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
       try {
         if (engine.state.phase === 'BIDDING') {
           const aiHand = turnPlayer.hand;
-          const decision = selectBid({ hand: aiHand, giruda: engine.state.giruda as string, currentBid: engine.state.currentBid });
+          const decision = selectBid({ hand: aiHand, currentBid: engine.state.highestBid });
           const isPass = decision.bid === null;
-          engine.placeBid(turnPlayer.id, decision.bid ?? undefined, isPass);
-          this.server.to(roomId).emit(GAME_EVENTS.BID_PLACED, {
-            roomId,
-            playerId: turnPlayer.id,
-            bid: decision.bid,
+          const result = engine.placeBid(turnPlayer.id, {
             pass: isPass,
+            score: decision.bid ?? undefined,
+            giruda: decision.giruda ?? undefined,
           });
+          this.emitBidResult(roomId, turnPlayer.id, decision.bid, decision.giruda, isPass, result);
         } else if (engine.state.phase === 'TRICK_PLAYING') {
           const currentTrickPlays = engine.state.currentTrick?.cards ?? [];
           const winnerOfCurrent = currentTrickPlays.length > 0 ? currentTrickPlays[currentTrickPlays.length - 1] : null;
@@ -167,8 +168,8 @@ export class GameGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
             turnNumber: engine.state.currentTrickNumber,
             totalTricks: 10,
             isPartnerWinningCurrentTrick: isPartnerWinning,
-            mightyCard: { suit: 'SPADE', rank: 'A' },
-            jokerCallCard: { suit: 'CLUB', rank: '3' },
+            mightyCard: engine.mightyCard,
+            jokerCallCard: engine.jokerCallCard,
           });
           const result = engine.playCard(turnPlayer.id, decision.cardId);
           this.server.to(roomId).emit(GAME_EVENTS.CARD_PLAYED, {
@@ -194,6 +195,24 @@ export class GameGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
     }, delayMs);
 
     managed.aiTimers.set(turnPlayer.id, timer);
+  }
+
+  private emitBidResult(
+    roomId: string,
+    playerId: string,
+    bid: number | null,
+    giruda: string | null,
+    pass: boolean,
+    result: { bidLeader?: string; completed: boolean; redealt: boolean }
+  ) {
+    this.server.to(roomId).emit(GAME_EVENTS.BID_PLACED, { roomId, playerId, bid, giruda, pass });
+    if (result.completed || result.redealt) {
+      this.server.to(roomId).emit(GAME_EVENTS.BID_ROUND_COMPLETE, {
+        roomId,
+        redealt: result.redealt,
+        presidentPlayerId: result.completed ? result.bidLeader : null,
+      });
+    }
   }
 
   @SubscribeMessage(GAME_EVENTS.CREATE_ROOM)
@@ -329,18 +348,12 @@ export class GameGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
     if (engine.state.players[engine.state.currentTurnIndex]?.id !== player.id) throw new WsException({ code: 'NOT_YOUR_TURN', message: 'Not your turn' });
 
     const isPass = dto.pass === true;
-    engine.placeBid(dto.playerId, dto.bid, isPass);
+    const result = engine.placeBid(dto.playerId, { pass: isPass, score: dto.bid, giruda: dto.giruda });
 
-    this.server.to(dto.roomId).emit(GAME_EVENTS.BID_PLACED, {
-      roomId: dto.roomId,
-      playerId: dto.playerId,
-      bid: dto.bid,
-      pass: isPass,
-    });
+    this.emitBidResult(dto.roomId, dto.playerId, dto.bid ?? null, dto.giruda ?? null, isPass, result);
     this.broadcastState(managed);
 
-    // Check bidding completion: all non-owner have bid/passed once around, simplified: after owner + others act once
-    // For MVP, advance to next turn; if AI, let it act.
+    // The engine decides when bidding ends; if the next turn is an AI, let it act.
     this.scheduleAiTurn(dto.roomId);
 
     return this.ok<RoomAckData>({ roomId: dto.roomId, playerId: dto.playerId });

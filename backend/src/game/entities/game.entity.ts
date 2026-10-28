@@ -9,6 +9,17 @@ export interface Card {
 
 export type Suit = 'SPADE' | 'DIAMOND' | 'HEART' | 'CLUB';
 
+/** Trump (기루다) declared in a bid; `NO_GIRUDA` means no trump suit. */
+export type BidGiruda = Suit | 'NO_GIRUDA';
+
+export interface Bid {
+  /** Seat index of the bidder in GameState.players. */
+  bidderIndex: number;
+  /** 13 ~ 20. */
+  score: number;
+  giruda: BidGiruda;
+}
+
 export type GamePhase =
   | 'READY'
   | 'DEALING'
@@ -29,6 +40,8 @@ export interface Player {
   isReady: boolean;
   isAi: boolean;
   bid?: number;
+  /** True once the player has passed in the current bidding; passed players cannot bid again. */
+  hasPassed?: boolean;
   /** Score (point) cards (10, J, Q, K, A) won by this player in resolved tricks. */
   collectedScoreCards: Card[];
   /** Number of score cards collected so far (== collectedScoreCards.length). */
@@ -75,16 +88,20 @@ export interface GameState {
   isJokerCallActive: boolean;
   kitty: Card[];
   giruda: Suit | 'NO_GIRUDA';
+  /** Id of the president (주공). Empty until bidding completes; independent of the room host. */
   ownerPlayerId: string;
-  /** Index of the bid winner (president / 주공); null until a bid is placed. */
+  /** Index of the bid winner (president / 주공); null until bidding completes. */
   presidentIndex: number | null;
   friendDeclaration: FriendDeclaration | null;
   /** Index of the friend; null until revealed/assigned. */
   friendIndex: number | null;
   friendPlayerId?: string;
-  /** Consecutive passes in the current bidding round. */
+  /** Number of players who have passed in the current bidding. */
   passCount: number;
+  /** Score of the highest bid so far (0 if none); mirrors `highestBid.score`. */
   currentBid: number;
+  /** Highest bid so far (score + giruda), or null if nobody has bid. */
+  highestBid: Bid | null;
   bidLeader?: string;
   players: Player[];
 }

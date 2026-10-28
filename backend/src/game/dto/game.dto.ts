@@ -29,6 +29,11 @@ export class PlaceBidDto {
   @IsOptional()
   bid?: number;
 
+  /** SPADE | DIAMOND | HEART | CLUB | NO_GIRUDA. Required unless passing. */
+  @IsString()
+  @IsOptional()
+  giruda?: string;
+
   @IsBoolean()
   @IsOptional()
   pass?: boolean;
