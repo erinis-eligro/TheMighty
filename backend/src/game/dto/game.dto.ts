@@ -39,6 +39,31 @@ export class PlaceBidDto {
   pass?: boolean;
 }
 
+export class ExchangeKittyDto {
+  @IsString()
+  @IsUUID()
+  roomId!: string;
+
+  @IsString()
+  @IsUUID()
+  playerId!: string;
+
+  /** Exactly 3 distinct card ids from the president's 13 cards (hand + kitty). */
+  @IsArray()
+  @IsString({ each: true })
+  discardCardIds!: string[];
+
+  /** Final giruda. Omit to keep the bid giruda. */
+  @IsString()
+  @IsOptional()
+  giruda?: string;
+
+  /** Raised bid score; required only when the giruda is changed. */
+  @IsNumber()
+  @IsOptional()
+  bidScore?: number;
+}
+
 export class PlayCardDto {
   @IsString()
   @IsUUID()

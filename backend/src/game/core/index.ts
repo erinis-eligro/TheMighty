@@ -19,12 +19,14 @@ export {
   TOTAL_TRICKS,
   CARDS_PER_PLAYER,
   KITTY_SIZE,
+  GIRUDA_CHANGE_RAISE,
   PLAYER_COUNT,
   DECK_SIZE,
 } from './rules';
 export {
   selectBid,
   selectCardToPlay,
+  selectKittyDiscard,
   generateAiName,
   type AiBidDecision,
   type AiPlayDecision,
