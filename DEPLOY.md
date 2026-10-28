@@ -38,8 +38,5 @@ docker compose down -v
 
 ## 참고
 - PostgreSQL 데이터는 `mighty_pg_data` 볼륨에 영구 저장됩니다.
-- 백엔드 시작 시 `prisma migrate`가 자동으로 수행되지는 않으므로, 최초 1회만 아래 명령을 실행해 스키마를 적용하세요:
-  ```powershell
-  docker compose exec backend npx prisma migrate deploy
-  ```
-  (또는 Dockerfile의 CMD 앞에 마이그레이션 단계를 추가할 수 있습니다.)
+- 백엔드 컨테이너는 시작 시 `npx prisma migrate deploy` 를 자동 실행하므로, 빈 DB에서도 `docker compose up` 만으로 스키마가 생성됩니다.
+- 스키마를 변경하면 `cd backend && npx prisma migrate dev --name <name>` 으로 마이그레이션을 만들어 `backend/prisma/migrations` 에 함께 커밋하세요.

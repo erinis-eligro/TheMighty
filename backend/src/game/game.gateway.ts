@@ -392,6 +392,7 @@ export class GameGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
               role: Role.OWNER,
               is_win: isWin,
               bid_score: bidScore,
+              team_points: teamPoints,
               giruda: engine.state.giruda as Giruda,
             },
           });

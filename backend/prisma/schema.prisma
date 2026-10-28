@@ -39,6 +39,7 @@ model GameHistory {
   role        Role
   is_win      Boolean
   bid_score   Int
+  team_points Int      @default(0) // 주공팀이 획득한 점수 카드 수
   giruda      Giruda
   created_at  DateTime @default(now()) @db.Timestamptz(6)
 

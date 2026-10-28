@@ -117,9 +117,9 @@ export class GameService {
     }));
   }
 
-  async saveGameHistory(userId: string, role: Role, isWin: boolean, bidScore: number, giruda: Giruda) {
+  async saveGameHistory(userId: string, role: Role, isWin: boolean, bidScore: number, giruda: Giruda, teamPoints = 0) {
     await this.prisma.gameHistory.create({
-      data: { user_id: userId, role, is_win: isWin, bid_score: bidScore, giruda },
+      data: { user_id: userId, role, is_win: isWin, bid_score: bidScore, team_points: teamPoints, giruda },
     });
     await this.prisma.user.update({
       where: { id: userId },
