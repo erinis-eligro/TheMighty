@@ -31,7 +31,7 @@ export function PlayerArea({ player, isCurrentTurn }: PlayerAreaProps) {
         {player.isAi && <span className="text-[10px] bg-[#8B5CF6] text-white px-1.5 rounded">AI</span>}
         <span className="text-xs font-bold">{player.handCount}</span>
       </div>
-      <div className="text-xs text-[#6B7280]">{player.trickScore}점</div>
+      <div className="text-xs text-[#6B7280]">{player.score}점</div>
       {player.isFriend && <span className="text-[10px] text-[#8B5CF6] font-bold">프렌드</span>}
     </motion.div>
   );
