@@ -57,6 +57,15 @@ export class GameStateDto {
   @IsString()
   turnplayerId!: string;
 
+  @IsNumber()
+  currentTurnIndex!: number;
+
+  @IsNumber()
+  currentTrickNumber!: number;
+
+  @IsNumber()
+  passCount!: number;
+
   @IsArray()
   @ValidateNested({ each: true })
   @Type(() => Object)
@@ -70,7 +79,7 @@ export class GameStateDto {
   @IsArray()
   @ValidateNested({ each: true })
   @Type(() => Object)
-  tricks!: any[];
+  trickHistory!: any[];
 
   @IsArray()
   @ValidateNested({ each: true })

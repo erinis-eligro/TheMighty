@@ -25,7 +25,8 @@ export class GameService {
       hand: [],
       isReady: false,
       isAi: false,
-      trickScore: 0,
+      collectedScoreCards: [],
+      score: 0,
       isFriend: false,
       isOwner: true,
     };
@@ -72,7 +73,8 @@ export class GameService {
       hand: [],
       isReady: false,
       isAi: false,
-      trickScore: 0,
+      collectedScoreCards: [],
+      score: 0,
       isFriend: false,
       isOwner: false,
     };

@@ -13,15 +13,15 @@ const SEAT_OFFSET: Record<string, { left: string; top: string }> = {
 };
 
 export function TrickBoard() {
-  const { currentTrick, tricks, turnPlayerId, playerId, players } = useGameStore();
-  const isMyTurn = turnPlayerId === playerId;
-  const currentPlayer = players.find((p: PlayerType) => p.id === turnPlayerId);
+  const { currentTrick, trickHistory, currentTurnIndex, playerId, players } = useGameStore();
+  const currentPlayer = players[currentTurnIndex] as PlayerType | undefined;
+  const isMyTurn = currentPlayer?.id === playerId;
 
   return (
     <div className="relative w-full h-[320px] flex items-center justify-center">
       <div className="absolute inset-0 flex items-center justify-center rounded-2xl bg-[#F3F4F6]/60 border-2 border-dashed border-[#CBD5E1] w-[460px] h-[280px]">
         {currentTrick && currentTrick.cards.length > 0 ? (
-          currentTrick.cards.map((play: { playerId: string; card: CardType }, i: number) => {
+          currentTrick.cards.map((play, i: number) => {
             const player = players.find((p: PlayerType) => p.id === play.playerId);
             const off = SEAT_OFFSET[player?.seat ?? 'bottom'] ?? SEAT_OFFSET.bottom;
             const indexOffset = (i - 2) * 22;
@@ -42,7 +42,7 @@ export function TrickBoard() {
       </div>
 
       <AnimatePresence>
-        {tricks.slice(-3).map((t: TrickType, idx: number) => {
+        {trickHistory.slice(-3).map((t: TrickType, idx: number) => {
           const winner = players.find((p: PlayerType) => p.id === t.winnerPlayerId);
           return (
             <motion.div
