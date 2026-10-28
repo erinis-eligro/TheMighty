@@ -6,7 +6,7 @@ const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL ?? 'http://localhost:300
 export type Card = {
   id: string;
   suit: 'SPADE' | 'DIAMOND' | 'HEART' | 'CLUB' | 'JOKER';
-  rank: '3' | '4' | '5' | '6' | '7' | '8' | '9' | '10' | 'J' | 'Q' | 'K' | 'A' | '2';
+  rank: '2' | '3' | '4' | '5' | '6' | '7' | '8' | '9' | '10' | 'J' | 'Q' | 'K' | 'A';
   isJoker: boolean;
   hidden?: boolean;
 };
