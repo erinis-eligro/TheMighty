@@ -64,6 +64,31 @@ export class ExchangeKittyDto {
   bidScore?: number;
 }
 
+export class DeclareFriendDto {
+  @IsString()
+  @IsUUID()
+  roomId!: string;
+
+  @IsString()
+  @IsUUID()
+  playerId!: string;
+
+  /** NO_FRIEND | FIRST_TRICK | MIGHTY | JOKER | CARD */
+  @IsString()
+  @IsIn(['NO_FRIEND', 'FIRST_TRICK', 'MIGHTY', 'JOKER', 'CARD'])
+  type!: string;
+
+  /** Required when type is CARD. */
+  @IsString()
+  @IsOptional()
+  suit?: string;
+
+  /** Required when type is CARD. */
+  @IsString()
+  @IsOptional()
+  rank?: string;
+}
+
 export class PlayCardDto {
   @IsString()
   @IsUUID()
@@ -75,6 +100,16 @@ export class PlayCardDto {
 
   @IsString()
   cardId!: string;
+
+  /** Leader declares the joker call; only valid when leading with the joker-call card. */
+  @IsBoolean()
+  @IsOptional()
+  jokerCall?: boolean;
+
+  /** Suit named when leading with the joker. */
+  @IsIn(['SPADE', 'DIAMOND', 'HEART', 'CLUB'])
+  @IsOptional()
+  jokerLeadSuit?: string;
 }
 
 export class GameStateDto {

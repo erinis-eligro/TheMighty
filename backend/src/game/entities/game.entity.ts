@@ -121,6 +121,12 @@ export interface GameState {
   /** Index of the friend; null until revealed/assigned. */
   friendIndex: number | null;
   friendPlayerId?: string;
+  /**
+   * True once the friend question is settled for all players: the friend was
+   * revealed, or the president plays without one (NO_FRIEND, the president
+   * holds the card, ...). Until then `friendIndex`/`friendPlayerId` stay empty.
+   */
+  friendRevealed: boolean;
   /** Number of players who have passed in the current bidding. */
   passCount: number;
   /** Score of the highest bid so far (0 if none); mirrors `highestBid.score`. */

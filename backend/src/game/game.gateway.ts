@@ -13,19 +13,22 @@ import { Server, Socket } from 'socket.io';
 import { Logger, UseFilters, UsePipes, ValidationPipe } from '@nestjs/common';
 import { GameService } from './game.service';
 import { PrismaService } from '../prisma/prisma.service';
-import { GAME_EVENTS } from './constants';
+import { GAME_EVENTS, TRICK_RESOLVED_DELAY_MS } from './constants';
 import { SeatPosition } from './constants';
 import { GameWsExceptionFilter } from './game-ws-exception.filter';
 import { Ack, GAME_NAMESPACE, RoomAckData, RoomIdAckData } from './protocol';
-import { CreateRoomDto, ExchangeKittyDto, JoinRoomDto, PlaceBidDto, PlayCardDto } from './dto/game.dto';
-import { Player } from './entities/game.entity';
+import { CreateRoomDto, DeclareFriendDto, ExchangeKittyDto, JoinRoomDto, PlaceBidDto, PlayCardDto } from './dto/game.dto';
+import { Player, Trick } from './entities/game.entity';
 import {
   GameEngine,
   createInitialGameState,
   selectBid,
   selectCardToPlay,
+  selectFriendDeclaration,
   selectKittyDiscard,
+  type FriendReveal,
   generateAiName,
+  TOTAL_TRICKS,
 } from './core';
 import { Role, Giruda } from '@prisma/client';
 
@@ -36,6 +39,8 @@ interface ManagedRoom {
   aiTimers: Map<string, NodeJS.Timeout>;
   /** True once game_end was sent and the result was persisted (guards against double saves). */
   finished?: boolean;
+  /** Fires after TRICK_RESOLVED_DELAY_MS to start the next trick / finish the game. */
+  resolveTimer?: NodeJS.Timeout;
 }
 
 // CORS origins are configured via the CORS_ORIGIN env var in main.ts (CorsIoAdapter).
@@ -75,6 +80,10 @@ export class GameGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
     if (!managed) return;
     for (const [, t] of managed.aiTimers) clearTimeout(t);
     managed.aiTimers.clear();
+    if (managed.resolveTimer) {
+      clearTimeout(managed.resolveTimer);
+      managed.resolveTimer = undefined;
+    }
   }
 
   private getManaged(roomId: string): ManagedRoom {
@@ -110,6 +119,7 @@ export class GameGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
       friendDeclaration: engine.state.friendDeclaration,
       friendIndex: engine.state.friendIndex,
       friendPlayerId: engine.state.friendPlayerId,
+      friendRevealed: engine.state.friendRevealed,
       result: engine.state.phase === 'GAME_OVER' ? (engine.state.result ?? null) : null,
       passCount: engine.state.passCount,
       currentBid: engine.state.currentBid,
@@ -144,6 +154,7 @@ export class GameGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
     if (
       engine.state.phase !== 'BIDDING' &&
       engine.state.phase !== 'KITTY_EXCHANGE' &&
+      engine.state.phase !== 'FRIEND_SELECTION' &&
       engine.state.phase !== 'TRICK_PLAYING'
     ) {
       return;
@@ -175,6 +186,13 @@ export class GameGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
           });
           const result = engine.exchangeKitty(turnPlayer.id, decision);
           this.emitKittyExchanged(roomId, turnPlayer.id, result);
+        } else if (engine.state.phase === 'FRIEND_SELECTION') {
+          const decision = selectFriendDeclaration({
+            hand: turnPlayer.hand,
+            giruda: engine.state.giruda as string,
+          });
+          const result = engine.declareFriend(turnPlayer.id, decision);
+          this.emitFriendDeclared(roomId, turnPlayer.id, result);
         } else if (engine.state.phase === 'TRICK_PLAYING') {
           const currentTrickPlays = engine.state.currentTrick?.cards ?? [];
           const winnerOfCurrent = currentTrickPlays.length > 0 ? currentTrickPlays[currentTrickPlays.length - 1] : null;
@@ -187,32 +205,30 @@ export class GameGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
             leadSuit: engine.state.currentTrick?.leadSuit,
             currentTrickPlays,
             giruda: engine.state.giruda as string,
-            turnNumber: engine.state.currentTrickNumber,
-            totalTricks: 10,
+            trickNumber: engine.state.currentTrickNumber,
+            totalTricks: TOTAL_TRICKS,
             isPartnerWinningCurrentTrick: isPartnerWinning,
             mightyCard: engine.mightyCard,
             jokerCallCard: engine.jokerCallCard,
+            restrictGirudaLead: engine.restrictsGirudaLead(),
+            isJokerCallActive: engine.state.isJokerCallActive,
           });
-          const result = engine.playCard(turnPlayer.id, decision.cardId);
+          const result = engine.playCard(turnPlayer.id, decision.cardId, {
+            jokerCall: decision.jokerCall,
+            jokerLeadSuit: decision.jokerLeadSuit,
+          });
           this.server.to(roomId).emit(GAME_EVENTS.CARD_PLAYED, {
             roomId,
             playerId: turnPlayer.id,
             cardId: decision.cardId,
           });
-          if (result.trickComplete && result.trick) {
-            this.server.to(roomId).emit(GAME_EVENTS.TURN_COMPLETE, {
-              roomId,
-              trick: result.trick,
-              winnerPlayerId: result.trick.winnerPlayerId,
-              points: result.points,
-            });
-          }
+          if (result.friendRevealed) this.emitFriendRevealed(roomId, result.friendRevealed);
+          this.handleTrickResult(roomId, managed, result);
         }
       } catch (e) {
         this.logger.error(`AI turn error: ${(e as Error).message}`);
       } finally {
         this.broadcastState(managed);
-        this.finishGameIfOver(roomId);
         this.scheduleAiTurn(roomId);
       }
     }, delayMs);
@@ -221,8 +237,57 @@ export class GameGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
   }
 
   /**
-   * Called after every card (human or AI). Once the engine reached GAME_OVER it
-   * announces the scored result, stops the AI timers and saves the human's record.
+   * After a card was played: if it completed the trick the engine is now in
+   * TRICK_RESOLVED. Announce the result and let a server timer advance the
+   * game after TRICK_RESOLVED_DELAY_MS so clients can see all 5 cards.
+   */
+  private handleTrickResult(
+    roomId: string,
+    managed: ManagedRoom,
+    result: { trickComplete?: boolean; trick?: Trick; points?: number }
+  ) {
+    if (!result.trickComplete || !result.trick) return;
+    const engine = managed.engine;
+    const trick = result.trick;
+    const winner = engine.state.players.find((p) => p.id === trick.winnerPlayerId);
+
+    this.server.to(roomId).emit(GAME_EVENTS.TURN_COMPLETE, {
+      roomId,
+      trick,
+      winnerPlayerId: trick.winnerPlayerId,
+      points: result.points,
+    });
+    this.server.to(roomId).emit(GAME_EVENTS.TRICK_RESOLVED, {
+      roomId,
+      trick,
+      trickNumber: trick.trickNumber,
+      winnerPlayerId: trick.winnerPlayerId,
+      winnerIndex: trick.winnerIndex,
+      points: result.points,
+      collectedScoreCards: winner?.collectedScoreCards ?? [],
+      friendPlayerId: engine.state.friendPlayerId,
+    });
+
+    if (managed.resolveTimer) clearTimeout(managed.resolveTimer);
+    managed.resolveTimer = setTimeout(() => {
+      managed.resolveTimer = undefined;
+      try {
+        const { gameOver } = engine.advanceAfterTrick();
+        this.broadcastState(managed);
+        if (gameOver) {
+          this.finishGameIfOver(roomId);
+        } else {
+          this.scheduleAiTurn(roomId);
+        }
+      } catch (e) {
+        this.logger.error(`Trick advance error: ${(e as Error).message}`);
+      }
+    }, TRICK_RESOLVED_DELAY_MS);
+  }
+
+  /**
+   * Once the engine reached GAME_OVER (after the last trick resolved) it announces
+   * the scored result, stops the AI timers and saves the human's record.
    */
   private finishGameIfOver(roomId: string): void {
     const managed = this.rooms.get(roomId);
@@ -275,6 +340,24 @@ export class GameGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
         presidentPlayerId: result.completed ? result.bidLeader : null,
       });
     }
+  }
+
+  /** Public announcement of the declared condition; who the friend is stays hidden. */
+  private emitFriendDeclared(
+    roomId: string,
+    playerId: string,
+    result: { declaration: unknown; friendRevealed?: FriendReveal }
+  ) {
+    this.server.to(roomId).emit(GAME_EVENTS.FRIEND_DECLARED, {
+      roomId,
+      playerId,
+      declaration: result.declaration,
+    });
+    if (result.friendRevealed) this.emitFriendRevealed(roomId, result.friendRevealed);
+  }
+
+  private emitFriendRevealed(roomId: string, reveal: FriendReveal) {
+    this.server.to(roomId).emit(GAME_EVENTS.FRIEND_REVEALED, { roomId, ...reveal });
   }
 
   /** Public announcement only: the discarded cards are never broadcast. */
@@ -470,6 +553,35 @@ export class GameGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
     return this.ok<RoomAckData>({ roomId: dto.roomId, playerId: dto.playerId });
   }
 
+  @SubscribeMessage(GAME_EVENTS.DECLARE_FRIEND)
+  @UsePipes(new ValidationPipe({ whitelist: true, transform: true }))
+  handleDeclareFriend(@ConnectedSocket() client: Socket, @MessageBody() dto: DeclareFriendDto) {
+    const managed = this.getManaged(dto.roomId);
+    const engine = managed.engine;
+
+    // Identity is decided by the server: the socket must be the one bound to dto.playerId.
+    const player = engine.state.players.find((p) => p.id === dto.playerId);
+    if (!player || player.isAi || managed.socketByPlayerId.get(dto.playerId) !== client.id) {
+      throw new WsException({ code: 'INVALID_PLAYER', message: 'Only the human president can declare the friend' });
+    }
+    if (engine.state.phase !== 'FRIEND_SELECTION') {
+      throw new WsException({ code: 'INVALID_PHASE', message: 'Not in friend selection phase' });
+    }
+    if (engine.state.ownerPlayerId !== player.id) {
+      throw new WsException({ code: 'NOT_PRESIDENT', message: 'Only the president can declare the friend' });
+    }
+
+    const result = engine.declareFriend(dto.playerId, { type: dto.type, suit: dto.suit, rank: dto.rank });
+
+    this.emitFriendDeclared(dto.roomId, dto.playerId, result);
+    this.broadcastState(managed);
+
+    // The president leads first; if that is an AI (never for a human president) it acts next.
+    this.scheduleAiTurn(dto.roomId);
+
+    return this.ok<RoomAckData>({ roomId: dto.roomId, playerId: dto.playerId });
+  }
+
   @SubscribeMessage(GAME_EVENTS.PLAY_CARD)
   @UsePipes(new ValidationPipe({ whitelist: true, transform: true }))
   handlePlayCard(@ConnectedSocket() client: Socket, @MessageBody() dto: PlayCardDto) {
@@ -480,27 +592,22 @@ export class GameGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
     if (!player || player.isAi) throw new WsException({ code: 'INVALID_PLAYER', message: 'Only human can play card' });
     if (engine.state.players[engine.state.currentTurnIndex]?.id !== player.id) throw new WsException({ code: 'NOT_YOUR_TURN', message: 'Not your turn' });
 
-    const result = engine.playCard(dto.playerId, dto.cardId);
+    const result = engine.playCard(dto.playerId, dto.cardId, {
+      jokerCall: dto.jokerCall,
+      jokerLeadSuit: dto.jokerLeadSuit,
+    });
 
     this.server.to(dto.roomId).emit(GAME_EVENTS.CARD_PLAYED, {
       roomId: dto.roomId,
       playerId: dto.playerId,
       cardId: dto.cardId,
     });
-
-    if (result.trickComplete && result.trick) {
-      this.server.to(dto.roomId).emit(GAME_EVENTS.TURN_COMPLETE, {
-        roomId: dto.roomId,
-        trick: result.trick,
-        winnerPlayerId: result.trick.winnerPlayerId,
-        points: result.points,
-      });
-    }
-
+    if (result.friendRevealed) this.emitFriendRevealed(dto.roomId, result.friendRevealed);
+    this.handleTrickResult(dto.roomId, managed, result);
     this.broadcastState(managed);
 
-    this.finishGameIfOver(dto.roomId);
-
+    // After a completed trick the phase is TRICK_RESOLVED and this is a no-op;
+    // the resolve timer schedules the next AI turn.
     this.scheduleAiTurn(dto.roomId);
 
     return this.ok<RoomAckData>({ roomId: dto.roomId, playerId: dto.playerId });

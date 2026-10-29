@@ -92,6 +92,8 @@ interface GameState {
   friendDeclaration: FriendDeclaration | null;
   friendIndex: number | null;
   friendPlayerId?: string;
+  /** True once the friend is public (or the president plays without one). */
+  friendRevealed: boolean;
   passCount: number;
   currentBid: number;
   highestBid: Bid | null;
@@ -135,6 +137,7 @@ export const useGameStore = create<GameState>((set) => ({
   presidentIndex: null,
   friendDeclaration: null,
   friendIndex: null,
+  friendRevealed: false,
   passCount: 0,
   currentBid: 0,
   highestBid: null,
@@ -159,7 +162,7 @@ export const useGameStore = create<GameState>((set) => ({
   setPhase: (phase) => set({ phase }),
   setTurn: (turnPlayerId) => set({ turnPlayerId }),
   setCurrentTrick: (currentTrick) => set({ currentTrick }),
-  addTrick: (trick) => set((s) => ({ trickHistory: [...s.trickHistory, trick], currentTrick: null })),
+  addTrick: (trick) => set((s) => ({ trickHistory: [...s.trickHistory, trick] })),
   setKitty: (kitty) => set({ kitty }),
   setGiruda: (giruda) => set({ giruda }),
   setBid: (currentBid, bidLeader) => set({ currentBid, bidLeader }),
@@ -167,7 +170,7 @@ export const useGameStore = create<GameState>((set) => ({
   reset: () => set({
     phase: 'READY', players: [], currentTrick: null, trickHistory: [], currentTrickNumber: 0,
     currentTurnIndex: 0, turnPlayerId: '', leadSuit: null, isJokerCallActive: false, kitty: [],
-    presidentIndex: null, friendDeclaration: null, friendIndex: null, friendPlayerId: undefined,
+    presidentIndex: null, friendDeclaration: null, friendIndex: null, friendPlayerId: undefined, friendRevealed: false,
     passCount: 0, currentBid: 0, highestBid: null, bidLeader: undefined, error: null,
   }),
 }));
