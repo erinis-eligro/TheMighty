@@ -26,8 +26,7 @@ const SUIT_COLOR: Record<string, string> = {
 };
 
 export function Card({ card, selectable, onSelect }: CardProps) {
-  const { playerId, players, currentTurnIndex } = useGameStore.getState();
-  const isMyTurn = players[currentTurnIndex]?.id === playerId;
+  const isMyTurn = useGameStore((s) => s.players[s.currentTurnIndex]?.id === s.playerId);
   const isHidden = card.hidden || false;
   const suitColor = card.isJoker ? '#6366f1' : SUIT_COLOR[card.suit] ?? '#000000';
 
