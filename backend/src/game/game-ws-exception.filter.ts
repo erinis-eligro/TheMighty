@@ -38,8 +38,8 @@ export class GameWsExceptionFilter implements ExceptionFilter {
   catch(exception: unknown, host: ArgumentsHost) {
     const args = host.getArgs();
     const client = host.switchToWs().getClient<Socket>();
-    const last = args[args.length - 1];
-    const ack = typeof last === 'function' ? (last as (res: Ack) => void) : undefined;
+    // Nest appends the handler pattern to the args, so the ack callback is not necessarily last.
+    const ack = [...args].reverse().find((a): a is (res: Ack) => void => typeof a === 'function');
 
     const error = toAckError(exception);
     this.logger.warn(`${error.code}: ${error.message}`);
