@@ -230,6 +230,7 @@ export class GameGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
         const decision = selectFriendDeclaration({
           hand: turnPlayer.hand,
           giruda: engine.state.giruda as string,
+          discarded: engine.state.kitty,
         });
         const result = engine.declareFriend(turnPlayer.id, decision);
         this.emitFriendDeclared(roomId, turnPlayer.id, result);
@@ -252,6 +253,11 @@ export class GameGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
           jokerCallCard: engine.jokerCallCard,
           restrictGirudaLead: engine.restrictsGirudaLead(),
           isJokerCallActive: engine.state.isJokerCallActive,
+          context: {
+            role: engine.getTeamRole(turnPlayer.id),
+            playedCards: engine.getPlayedCards(),
+            friendDeclaration: engine.state.friendDeclaration,
+          },
         });
         const result = engine.playCard(turnPlayer.id, decision.cardId, {
           jokerCall: decision.jokerCall,
