@@ -4,7 +4,7 @@ import { Card } from './Card';
 import { useGameStore, type Card as CardType } from '@/store/useGameStore';
 
 export function UserHand() {
-  const { playerId, currentTurnIndex, phase, roomId } = useGameStore();
+  const { playerId, currentTurnIndex, phase, roomId, playableCardIds } = useGameStore();
   const player = useGameStore.getState().players.find((p: { id: string }) => p.id === playerId);
   const isMyTurn = useGameStore.getState().players[currentTurnIndex]?.id === playerId;
 
@@ -24,7 +24,7 @@ export function UserHand() {
         <Card
           key={card.id}
           card={card}
-          selectable={selectable && !card.hidden}
+          selectable={selectable && !card.hidden && playableCardIds.includes(card.id)}
           onSelect={handleSelect}
         />
       ))}

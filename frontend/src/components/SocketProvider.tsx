@@ -51,6 +51,7 @@ export function SocketProvider({ children }: { children: React.ReactNode }) {
         currentBid: data.currentBid,
         highestBid: data.highestBid,
         bidLeader: data.bidLeader,
+        playableCardIds: data.playableCardIds ?? [],
         players: data.players.map((p: any) => ({
           id: p.id,
           username: p.username,

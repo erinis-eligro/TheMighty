@@ -59,14 +59,16 @@ export interface StartGameRequest {
 
 export interface PlaceBidRequest {
   roomId: string;
-  playerId: string;
+  /** Optional: the server identifies the player by the socket; if sent it must match. */
+  playerId?: string;
   bid?: number;
   pass?: boolean;
 }
 
 export interface ExchangeKittyRequest {
   roomId: string;
-  playerId: string;
+  /** Optional: the server identifies the player by the socket; if sent it must match. */
+  playerId?: string;
   /** Exactly 3 distinct card ids from the president's 13 cards (hand + kitty). */
   discardCardIds: string[];
   /** Final giruda; omit to keep the bid giruda. */
@@ -77,7 +79,8 @@ export interface ExchangeKittyRequest {
 
 export interface DeclareFriendRequest {
   roomId: string;
-  playerId: string;
+  /** Optional: the server identifies the player by the socket; if sent it must match. */
+  playerId?: string;
   /** NO_FRIEND | FIRST_TRICK | MIGHTY | JOKER | CARD */
   type: string;
   /** Required when type is CARD. */
@@ -88,7 +91,8 @@ export interface DeclareFriendRequest {
 
 export interface PlayCardRequest {
   roomId: string;
-  playerId: string;
+  /** Optional: the server identifies the player by the socket; if sent it must match. */
+  playerId?: string;
   cardId: string;
   /** Leader declares the joker call (leading with the joker-call card). */
   jokerCall?: boolean;

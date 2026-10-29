@@ -103,6 +103,45 @@ export class GameGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
     return { ok: true, data };
   }
 
+  /** Players as `forPlayerId` may see them: only his own hand, no socket ids, friend flag only once revealed. */
+  private maskedPlayers(managed: ManagedRoom, forPlayerId: string) {
+    const engine = managed.engine;
+    return engine.state.players.map((p) => ({
+      id: p.id,
+      username: p.username,
+      seat: p.seat,
+      isAi: p.isAi,
+      hand: p.id === forPlayerId ? p.hand : p.hand.map(() => ({ hidden: true })),
+      handCount: p.hand.length,
+      collectedScoreCards: p.collectedScoreCards,
+      score: p.score,
+      isFriend: engine.state.friendRevealed && p.isFriend,
+      isOwner: p.isOwner,
+      bid: p.bid,
+      hasPassed: p.hasPassed,
+    }));
+  }
+
+  /**
+   * Identity is decided by the server: the player bound to this socket. A `playerId` sent by the
+   * client is never trusted; if present it must match the bound player.
+   */
+  private resolveHumanPlayer(managed: ManagedRoom, client: Socket, requestedPlayerId?: string): Player {
+    const playerId = [...managed.socketByPlayerId.entries()].find(([, socketId]) => socketId === client.id)?.[0];
+    const player = playerId === undefined ? undefined : managed.engine.state.players.find((p) => p.id === playerId);
+    if (!player || player.isAi || (requestedPlayerId !== undefined && requestedPlayerId !== player.id)) {
+      throw new WsException({ code: 'INVALID_PLAYER', message: 'This socket is not bound to that player' });
+    }
+    return player;
+  }
+
+  /** Sends one event to every bound socket with a payload masked for that socket's player. */
+  private emitMasked(managed: ManagedRoom, event: string, build: (playerId: string) => unknown) {
+    for (const [playerId, socketId] of managed.socketByPlayerId) {
+      this.server.to(socketId).emit(event, build(playerId));
+    }
+  }
+
   private publicState(managed: ManagedRoom, forPlayerId: string) {
     const engine = managed.engine;
     return {
@@ -124,35 +163,23 @@ export class GameGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
       ownerPlayerId: engine.state.ownerPlayerId,
       presidentIndex: engine.state.presidentIndex,
       friendDeclaration: engine.state.friendDeclaration,
-      friendIndex: engine.state.friendIndex,
-      friendPlayerId: engine.state.friendPlayerId,
+      // Who the friend is stays hidden until the friend is revealed.
+      friendIndex: engine.state.friendRevealed ? engine.state.friendIndex : null,
+      friendPlayerId: engine.state.friendRevealed ? engine.state.friendPlayerId : undefined,
       friendRevealed: engine.state.friendRevealed,
+      // Legal plays of the viewer (empty unless it is his turn); drives the UI card highlight.
+      playableCardIds: engine.getPlayableCardIds(forPlayerId),
       result: engine.state.phase === 'GAME_OVER' ? (engine.state.result ?? null) : null,
       passCount: engine.state.passCount,
       currentBid: engine.state.currentBid,
       highestBid: engine.state.highestBid,
       bidLeader: engine.state.bidLeader,
-      players: engine.state.players.map((p) => ({
-        id: p.id,
-        username: p.username,
-        seat: p.seat,
-        isAi: p.isAi,
-        hand: p.id === forPlayerId ? p.hand : p.hand.map(() => ({ hidden: true })),
-        handCount: p.hand.length,
-        collectedScoreCards: p.collectedScoreCards,
-        score: p.score,
-        isFriend: p.isFriend,
-        isOwner: p.isOwner,
-        bid: p.bid,
-        hasPassed: p.hasPassed,
-      })),
+      players: this.maskedPlayers(managed, forPlayerId),
     };
   }
 
   private broadcastState(managed: ManagedRoom) {
-    for (const [playerId, socketId] of managed.socketByPlayerId) {
-      this.server.to(socketId).emit(GAME_EVENTS.STATE_SYNC, this.publicState(managed, playerId));
-    }
+    this.emitMasked(managed, GAME_EVENTS.STATE_SYNC, (playerId) => this.publicState(managed, playerId));
   }
 
   /**
@@ -322,7 +349,7 @@ export class GameGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
       winnerIndex: trick.winnerIndex,
       points: result.points,
       collectedScoreCards: winner?.collectedScoreCards ?? [],
-      friendPlayerId: engine.state.friendPlayerId,
+      friendPlayerId: engine.state.friendRevealed ? engine.state.friendPlayerId : undefined,
     });
 
     this.scheduleTrickAdvance(roomId, managed);
@@ -480,13 +507,14 @@ export class GameGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
     });
 
     client.join(roomId);
-    this.server.to(roomId).emit(GAME_EVENTS.ROOM_CREATED, {
+    const managedRoom = this.getManaged(roomId);
+    client.emit(GAME_EVENTS.ROOM_CREATED, {
       roomId,
       playerId: humanId,
-      players: allPlayers,
+      players: this.maskedPlayers(managedRoom, humanId),
       giruda,
     });
-    this.broadcastState(this.getManaged(roomId));
+    this.broadcastState(managedRoom);
 
     this.logger.log(`CREATE_ROOM: ${roomId} human=${humanId}`);
     return this.ok<RoomAckData>({ roomId, playerId: humanId });
@@ -504,7 +532,7 @@ export class GameGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
     client.emit(GAME_EVENTS.ROOM_JOINED, {
       roomId: dto.roomId,
       playerId: human?.id ?? '',
-      players: managed.engine.state.players,
+      players: this.maskedPlayers(managed, human?.id ?? ''),
     });
     this.broadcastState(managed);
     // Rejoining after a disconnect: pick the game up where the server paused it.
@@ -515,6 +543,11 @@ export class GameGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
   @SubscribeMessage(GAME_EVENTS.LEAVE_ROOM)
   handleLeaveRoom(@ConnectedSocket() client: Socket, @MessageBody() data: { roomId: string; playerId: string }) {
     const managed = this.rooms.get(data.roomId);
+    // Identity is decided by the server: only the player bound to this socket may leave as that player.
+    if (managed && managed.socketByPlayerId.get(data.playerId) !== client.id) {
+      client.leave(data.roomId);
+      return this.ok<RoomAckData>({ roomId: data.roomId, playerId: data.playerId });
+    }
     if (managed) {
       managed.socketByPlayerId.delete(data.playerId);
       this.clearAiTimers(data.roomId);
@@ -562,10 +595,10 @@ export class GameGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
       roomId: data.roomId,
       players: engine.state.players.map((p) => ({ id: p.id, handCount: p.hand.length })),
     });
-    this.server.to(data.roomId).emit(GAME_EVENTS.GAME_STARTED, {
+    this.emitMasked(managed, GAME_EVENTS.GAME_STARTED, (playerId) => ({
       roomId: data.roomId,
-      players: engine.state.players,
-    });
+      players: this.maskedPlayers(managed, playerId),
+    }));
     this.broadcastState(managed);
     this.scheduleAiTurn(data.roomId);
 
@@ -578,20 +611,19 @@ export class GameGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
     const managed = this.getManaged(dto.roomId);
     const engine = managed.engine;
 
-    const player = engine.state.players.find((p) => p.id === dto.playerId);
-    if (!player || player.isAi) throw new WsException({ code: 'INVALID_PLAYER', message: 'Only human can place bid here' });
+    const player = this.resolveHumanPlayer(managed, client, dto.playerId);
     if (engine.state.players[engine.state.currentTurnIndex]?.id !== player.id) throw new WsException({ code: 'NOT_YOUR_TURN', message: 'Not your turn' });
 
     const isPass = dto.pass === true;
-    const result = engine.placeBid(dto.playerId, { pass: isPass, score: dto.bid, giruda: dto.giruda });
+    const result = engine.placeBid(player.id, { pass: isPass, score: dto.bid, giruda: dto.giruda });
 
-    this.emitBidResult(dto.roomId, dto.playerId, dto.bid ?? null, dto.giruda ?? null, isPass, result);
+    this.emitBidResult(dto.roomId, player.id, dto.bid ?? null, dto.giruda ?? null, isPass, result);
     this.broadcastState(managed);
 
     // The engine decides when bidding ends; if the next turn is an AI, let it act.
     this.scheduleAiTurn(dto.roomId);
 
-    return this.ok<RoomAckData>({ roomId: dto.roomId, playerId: dto.playerId });
+    return this.ok<RoomAckData>({ roomId: dto.roomId, playerId: player.id });
   }
 
   @SubscribeMessage(GAME_EVENTS.EXCHANGE_KITTY)
@@ -600,11 +632,7 @@ export class GameGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
     const managed = this.getManaged(dto.roomId);
     const engine = managed.engine;
 
-    // Identity is decided by the server: the socket must be the one bound to dto.playerId.
-    const player = engine.state.players.find((p) => p.id === dto.playerId);
-    if (!player || player.isAi || managed.socketByPlayerId.get(dto.playerId) !== client.id) {
-      throw new WsException({ code: 'INVALID_PLAYER', message: 'Only the human president can exchange the kitty' });
-    }
+    const player = this.resolveHumanPlayer(managed, client, dto.playerId);
     if (engine.state.phase !== 'KITTY_EXCHANGE') {
       throw new WsException({ code: 'INVALID_PHASE', message: 'Not in kitty exchange phase' });
     }
@@ -612,16 +640,16 @@ export class GameGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
       throw new WsException({ code: 'NOT_PRESIDENT', message: 'Only the president can exchange the kitty' });
     }
 
-    const result = engine.exchangeKitty(dto.playerId, {
+    const result = engine.exchangeKitty(player.id, {
       discardCardIds: dto.discardCardIds,
       giruda: dto.giruda,
       bidScore: dto.bidScore,
     });
 
-    this.emitKittyExchanged(dto.roomId, dto.playerId, result);
+    this.emitKittyExchanged(dto.roomId, player.id, result);
     this.broadcastState(managed);
 
-    return this.ok<RoomAckData>({ roomId: dto.roomId, playerId: dto.playerId });
+    return this.ok<RoomAckData>({ roomId: dto.roomId, playerId: player.id });
   }
 
   @SubscribeMessage(GAME_EVENTS.DECLARE_FRIEND)
@@ -630,11 +658,7 @@ export class GameGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
     const managed = this.getManaged(dto.roomId);
     const engine = managed.engine;
 
-    // Identity is decided by the server: the socket must be the one bound to dto.playerId.
-    const player = engine.state.players.find((p) => p.id === dto.playerId);
-    if (!player || player.isAi || managed.socketByPlayerId.get(dto.playerId) !== client.id) {
-      throw new WsException({ code: 'INVALID_PLAYER', message: 'Only the human president can declare the friend' });
-    }
+    const player = this.resolveHumanPlayer(managed, client, dto.playerId);
     if (engine.state.phase !== 'FRIEND_SELECTION') {
       throw new WsException({ code: 'INVALID_PHASE', message: 'Not in friend selection phase' });
     }
@@ -642,15 +666,15 @@ export class GameGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
       throw new WsException({ code: 'NOT_PRESIDENT', message: 'Only the president can declare the friend' });
     }
 
-    const result = engine.declareFriend(dto.playerId, { type: dto.type, suit: dto.suit, rank: dto.rank });
+    const result = engine.declareFriend(player.id, { type: dto.type, suit: dto.suit, rank: dto.rank });
 
-    this.emitFriendDeclared(dto.roomId, dto.playerId, result);
+    this.emitFriendDeclared(dto.roomId, player.id, result);
     this.broadcastState(managed);
 
     // The president leads first; if that is an AI (never for a human president) it acts next.
     this.scheduleAiTurn(dto.roomId);
 
-    return this.ok<RoomAckData>({ roomId: dto.roomId, playerId: dto.playerId });
+    return this.ok<RoomAckData>({ roomId: dto.roomId, playerId: player.id });
   }
 
   @SubscribeMessage(GAME_EVENTS.PLAY_CARD)
@@ -659,18 +683,17 @@ export class GameGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
     const managed = this.getManaged(dto.roomId);
     const engine = managed.engine;
 
-    const player = engine.state.players.find((p) => p.id === dto.playerId);
-    if (!player || player.isAi) throw new WsException({ code: 'INVALID_PLAYER', message: 'Only human can play card' });
+    const player = this.resolveHumanPlayer(managed, client, dto.playerId);
     if (engine.state.players[engine.state.currentTurnIndex]?.id !== player.id) throw new WsException({ code: 'NOT_YOUR_TURN', message: 'Not your turn' });
 
-    const result = engine.playCard(dto.playerId, dto.cardId, {
+    const result = engine.playCard(player.id, dto.cardId, {
       jokerCall: dto.jokerCall,
       jokerLeadSuit: dto.jokerLeadSuit,
     });
 
     this.server.to(dto.roomId).emit(GAME_EVENTS.CARD_PLAYED, {
       roomId: dto.roomId,
-      playerId: dto.playerId,
+      playerId: player.id,
       cardId: dto.cardId,
     });
     if (result.friendRevealed) this.emitFriendRevealed(dto.roomId, result.friendRevealed);
@@ -681,6 +704,6 @@ export class GameGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
     // the resolve timer schedules the next AI turn.
     this.scheduleAiTurn(dto.roomId);
 
-    return this.ok<RoomAckData>({ roomId: dto.roomId, playerId: dto.playerId });
+    return this.ok<RoomAckData>({ roomId: dto.roomId, playerId: player.id });
   }
 }
