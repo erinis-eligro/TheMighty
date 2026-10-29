@@ -13,7 +13,7 @@ import { Namespace, Server, Socket } from 'socket.io';
 import { Logger, UseFilters, UsePipes, ValidationPipe } from '@nestjs/common';
 import { GameService } from './game.service';
 import { PrismaService } from '../prisma/prisma.service';
-import { GAME_EVENTS, TRICK_RESOLVED_DELAY_MS, getAiTurnDelayMs } from './constants';
+import { GAME_EVENTS, getAiTurnDelayMs, getTrickResolvedDelayMs } from './constants';
 import { GameWsExceptionFilter } from './game-ws-exception.filter';
 import { Ack, CreateRoomAckData, GAME_NAMESPACE, RoomAckData, RoomIdAckData, StartGameAckData } from './protocol';
 import { CreateRoomDto, DeclareFriendDto, ExchangeKittyDto, JoinRoomDto, PlaceBidDto, PlayCardDto } from './dto/game.dto';
@@ -304,7 +304,7 @@ export class GameGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
   /**
    * After a card was played: if it completed the trick the engine is now in
    * TRICK_RESOLVED. Announce the result and let a server timer advance the
-   * game after TRICK_RESOLVED_DELAY_MS so clients can see all 5 cards.
+   * game after the TRICK_RESOLVED delay so clients can see all 5 cards.
    */
   private handleTrickResult(
     roomId: string,
@@ -354,7 +354,7 @@ export class GameGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
       } catch (e) {
         this.logger.error(`Trick advance error: ${(e as Error).message}`);
       }
-    }, TRICK_RESOLVED_DELAY_MS);
+    }, getTrickResolvedDelayMs());
   }
 
   /**
