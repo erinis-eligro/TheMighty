@@ -1,86 +1,158 @@
 'use client';
 
+import { useEffect, useState, type FormEvent } from 'react';
+import { useRouter } from 'next/navigation';
 import { motion } from 'framer-motion';
 import { useGameStore } from '@/store/useGameStore';
-import { emitWithAck } from '@/lib/socket';
-import { clearSession, loadSession, saveSession } from '@/lib/session';
-import type { CreateRoomAckData, RoomAckData } from '@/types/protocol';
+import { fetchUserStats, type UserStats } from '@/lib/api';
+import { loadSession } from '@/lib/session';
+
+const NICKNAME_KEY = 'mighty.nickname';
+const MAX_NICKNAME = 50;
 
 export function Lobby() {
-  const { roomId, playerId, username, isConnected, error, setRoom, setError } = useGameStore();
-  const socket = useGameStore((s) => s.socket);
+  const router = useRouter();
+  const isConnected = useGameStore((s) => s.isConnected);
+  const error = useGameStore((s) => s.error);
+  const createRoom = useGameStore((s) => s.createRoom);
+  const rejoinRoom = useGameStore((s) => s.rejoinRoom);
+  const leaveRoom = useGameStore((s) => s.leaveRoom);
+  const setError = useGameStore((s) => s.setError);
 
-  const createRoom = async () => {
-    const name = prompt('닉네임을 입력하세요') || '플레이어';
-    if (!socket) return;
-    const res = await emitWithAck<CreateRoomAckData>(socket, 'create_room', { username: name });
-    if (res.ok) {
-      setError(null);
-      setRoom(res.data.roomId, res.data.playerId, name);
-      saveSession({ ...res.data, username: name });
-    } else {
-      setError(res.error.message);
+  const [nickname, setNickname] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [stats, setStats] = useState<UserStats | null>(null);
+  // Read after mount: the stored session is not available during server rendering.
+  const [savedRoomId, setSavedRoomId] = useState<string | null>(null);
+
+  useEffect(() => {
+    setError(null);
+    setNickname(localStorage.getItem(NICKNAME_KEY) ?? loadSession()?.username ?? '');
+    setSavedRoomId(loadSession()?.roomId ?? null);
+  }, [setError]);
+
+  const name = nickname.trim();
+
+  // Record summary of the typed nickname (debounced).
+  useEffect(() => {
+    if (!name) {
+      setStats(null);
+      return;
+    }
+    const controller = new AbortController();
+    const timer = setTimeout(() => {
+      fetchUserStats(name, controller.signal).then((s) => {
+        if (!controller.signal.aborted) setStats(s);
+      });
+    }, 400);
+    return () => {
+      clearTimeout(timer);
+      controller.abort();
+    };
+  }, [name]);
+
+  const startGame = async (e: FormEvent) => {
+    e.preventDefault();
+    if (!name || busy) return;
+    setBusy(true);
+    try {
+      localStorage.setItem(NICKNAME_KEY, name);
+      const ok = await createRoom(name);
+      if (ok) router.push(`/game/${useGameStore.getState().roomId}`);
+    } finally {
+      setBusy(false);
     }
   };
 
-  const joinRoom = async () => {
-    // Single-player: join_room is a rejoin of the session this tab created.
-    const saved = loadSession();
-    if (!socket || !saved) return;
-    const res = await emitWithAck<RoomAckData>(socket, 'join_room', {
-      roomId: saved.roomId,
-      rejoinToken: saved.rejoinToken,
-    });
-    if (res.ok) {
-      setError(null);
-      setRoom(res.data.roomId, res.data.playerId, saved.username);
-    } else {
-      clearSession();
-      setError(res.error.message);
+  const resume = async () => {
+    if (!savedRoomId || busy) return;
+    setBusy(true);
+    try {
+      const ok = await rejoinRoom(savedRoomId);
+      if (ok) router.push(`/game/${savedRoomId}`);
+      else setSavedRoomId(null); // the server no longer has the game (expired/finished)
+    } finally {
+      setBusy(false);
     }
+  };
+
+  const discardSaved = () => {
+    // Forget the stored game; the server drops the unattended session after its disconnect TTL.
+    leaveRoom();
+    setSavedRoomId(null);
   };
 
   return (
-    <div className="min-h-screen bg-[#F7F5FA] flex flex-col items-center justify-center p-6">
+    <div className="min-h-screen bg-pastel-bg flex flex-col items-center justify-center p-6">
       <motion.div
         initial={{ opacity: 0, y: 20 }}
         animate={{ opacity: 1, y: 0 }}
-        className="bg-white rounded-3xl shadow-2xl p-10 w-full max-w-md border border-[#E5E7EB]"
+        className="bg-pastel-card rounded-3xl shadow-2xl p-10 w-full max-w-md border border-gray-200"
       >
-        <h1 className="text-3xl font-bold text-center text-[#1F2937] mb-2">마이티 (Mighty)</h1>
-        <p className="text-center text-[#6B7280] mb-8">한국 전통 트릭테이킹 카드 게임</p>
+        <h1 className="text-3xl font-bold text-center text-pastel-text mb-2">마이티 (Mighty)</h1>
+        <p className="text-center text-pastel-muted mb-8">한국 전통 트릭테이킹 카드 게임</p>
 
-        <div className="space-y-3">
+        <form onSubmit={startGame} className="space-y-3">
+          <label htmlFor="nickname" className="block text-sm font-semibold text-pastel-text">
+            닉네임
+          </label>
+          <input
+            id="nickname"
+            value={nickname}
+            onChange={(e) => setNickname(e.target.value)}
+            maxLength={MAX_NICKNAME}
+            placeholder="닉네임을 입력하세요"
+            autoComplete="nickname"
+            className="w-full rounded-xl border border-gray-300 px-4 py-3 text-pastel-text focus:border-pastel-accent focus:outline-none"
+          />
           <button
-            onClick={createRoom}
-            disabled={!isConnected}
-            className="w-full py-4 bg-[#8B5CF6] text-white rounded-xl font-semibold hover:bg-[#7C3AED] disabled:opacity-50 disabled:cursor-not-allowed transition-colors shadow-lg"
+            type="submit"
+            disabled={!isConnected || !name || busy}
+            className="w-full py-4 bg-pastel-accentHover text-white rounded-xl font-semibold hover:bg-pastel-accent disabled:opacity-50 disabled:cursor-not-allowed transition-colors shadow-lg"
           >
-            방 만들기 (주공)
+            {busy ? '준비 중...' : '게임 시작'}
           </button>
-          <button
-            onClick={joinRoom}
-            disabled={!isConnected}
-            className="w-full py-4 bg-white text-[#8B5CF6] border-2 border-[#8B5CF6] rounded-xl font-semibold hover:bg-[#8B5CF6]/10 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-          >
-            이어하기 (재접속)
-          </button>
-        </div>
+        </form>
 
-        {roomId && (
-          <div className="mt-6 pt-6 border-t border-[#E5E7EB]">
-            <p className="text-sm text-[#6B7280] mb-2">방 ID: <span className="font-mono font-bold text-[#1F2937]">{roomId}</span></p>
-            <p className="text-xs text-[#9CA3AF]">당신: {username}</p>
+        {savedRoomId && (
+          <div className="mt-3 flex gap-2">
+            <button
+              onClick={resume}
+              disabled={!isConnected || busy}
+              className="flex-1 py-3 bg-pastel-card text-pastel-accentHover border-2 border-pastel-accentHover rounded-xl font-semibold hover:bg-pastel-bg disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+            >
+              이어하기
+            </button>
+            <button
+              onClick={discardSaved}
+              disabled={busy}
+              className="px-4 py-3 text-sm text-pastel-muted rounded-xl border border-gray-300 hover:bg-pastel-bg"
+            >
+              포기
+            </button>
           </div>
         )}
 
-        {!isConnected && (
-          <div className="mt-4 p-3 bg-[#FEE2E2] rounded-lg text-xs text-[#991B1B]">
-            백엔드 연결 실패. NestJS 서버(http://localhost:3001)를 확인하세요.
+        {name && (
+          <div className="mt-6 pt-6 border-t border-gray-200" aria-label="전적">
+            <p className="text-sm text-pastel-muted mb-1">{name} 님의 전적</p>
+            {stats ? (
+              <p className="text-pastel-text">
+                <span className="font-bold">{stats.totalGames}</span>전{' '}
+                <span className="font-bold text-emerald-600">{stats.wins}</span>승{' '}
+                <span className="font-bold text-rose-500">{stats.losses}</span>패
+                <span className="text-pastel-muted"> (승률 {stats.winRate}%)</span>
+              </p>
+            ) : (
+              <p className="text-sm text-pastel-muted">전적을 불러올 수 없습니다.</p>
+            )}
           </div>
         )}
+
         {error && (
-          <div className="mt-4 p-3 bg-[#FEE2E2] rounded-lg text-xs text-[#991B1B]">{error}</div>
+          <div role="alert" className="mt-4 p-3 bg-red-100 rounded-lg text-xs text-red-800">
+            {error}
+          </div>
         )}
       </motion.div>
     </div>

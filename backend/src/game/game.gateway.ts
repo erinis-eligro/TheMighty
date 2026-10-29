@@ -447,6 +447,12 @@ export class GameGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
   @SubscribeMessage(GAME_EVENTS.CREATE_ROOM)
   @UsePipes(new ValidationPipe({ whitelist: true, transform: true }))
   handleCreateRoom(@ConnectedSocket() client: Socket, @MessageBody() dto: CreateRoomDto) {
+    // Single-player: one game per socket. Starting a new game abandons the one this socket still holds.
+    const previous = this.gameService.findSessionBySocket(client.id);
+    if (previous) {
+      client.leave(previous.id);
+      this.gameService.deleteSession(previous.id);
+    }
     const session = this.gameService.createSession(dto.username, client.id);
     const roomId = session.id;
     const humanId = session.humanPlayerId;

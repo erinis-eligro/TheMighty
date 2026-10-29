@@ -290,6 +290,15 @@ describe('Session lifecycle', () => {
     assert.equal(service.findSession(roomId)!.engine.state.phase, 'BIDDING');
   });
 
+  test('creating a new room on the same socket abandons the previous session', () => {
+    const { gateway, service, client, roomId } = create();
+    const second = gateway.handleCreateRoom(client, { username: 'human' }) as { data: { roomId: string } };
+    assert.notEqual(second.data.roomId, roomId);
+    assert.equal(service.findSession(roomId), undefined);
+    assert.ok(service.findSession(second.data.roomId));
+    assert.ok((client.leave as jest.Mock).mock.calls.some((c) => c[0] === roomId));
+  });
+
   test('start_game from a socket not bound to the room is rejected', () => {
     const { gateway, service, roomId } = create();
     assert.throws(() => gateway.handleStartGame(makeClient('sock-x'), { roomId }), /not bound/);
@@ -325,5 +334,20 @@ describe('Session lifecycle', () => {
     gateway.handleDisconnect(client);
     assert.equal(service.findSession(roomId)!.humanSocketId, 'sock-2');
     assert.equal(service.findSession(roomId)!.expiryTimer, undefined);
+  });
+});
+
+describe('User stats', () => {
+  const serviceWith = (user: unknown) =>
+    new GameService({ user: { findUnique: jest.fn().mockResolvedValue(user) } } as unknown as PrismaService);
+
+  test('summarises wins, losses and win rate', async () => {
+    const stats = await serviceWith({ total_games: 3, win_count: 2, lose_count: 1 }).getUserStats('human');
+    assert.deepEqual(stats, { username: 'human', totalGames: 3, wins: 2, losses: 1, winRate: 67 });
+  });
+
+  test('an unknown nickname has an empty record', async () => {
+    const stats = await serviceWith(null).getUserStats('nobody');
+    assert.deepEqual(stats, { username: 'nobody', totalGames: 0, wins: 0, losses: 0, winRate: 0 });
   });
 });
