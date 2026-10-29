@@ -2,7 +2,8 @@ import { Card, Player, GameState, GamePhase, Trick, FriendDeclaration, BidGiruda
 import { SeatPosition } from '../constants';
 import { createDeck, shuffleDeck, validateDeck } from './deck';
 import { dealCards } from './deal';
-import { validatePlay, determineTrickWinner } from './trick';
+import { validatePlay, determineTrickWinner, type TrickResult } from './trick';
+import { isAlly } from './team';
 import { validateBid, bidRank, BID_GIRUDAS } from './bidding';
 import { scoreRound } from './score';
 import {
@@ -381,6 +382,42 @@ export class GameEngine {
   isFriend(playerId: string): boolean {
     const idx = this.indexOfPlayer(playerId);
     return idx >= 0 && idx === this.friendHolderIndex;
+  }
+
+  /**
+   * Whether `otherId` is known to be on the same team as `viewerId` (see `isAlly`).
+   * Respects the hidden friend: nothing is inferred from information the viewer
+   * would not have.
+   */
+  isAllyOf(viewerId: string, otherId: string): boolean {
+    return isAlly({
+      viewerId,
+      otherId,
+      ownerPlayerId: this.state.ownerPlayerId,
+      friendPlayerId: this.state.friendPlayerId,
+      friendRevealed: this.state.friendRevealed,
+      viewerIsFriend: this.isFriend(viewerId),
+    });
+  }
+
+  /**
+   * Who is winning the trick in progress, judged on the cards played so far
+   * (same rules as the final resolution). Null while no card has been played.
+   */
+  getCurrentTrickWinner(): TrickResult | null {
+    const trick = this.state.currentTrick;
+    if (!trick || trick.cards.length === 0) return null;
+    return determineTrickWinner({
+      plays: trick.cards,
+      leadSuit: trick.leadSuit,
+      giruda: this.state.giruda as string,
+      mightyCard: this._mightyCard,
+      jokerPowerless: isJokerPowerless({
+        trickNumber: trick.trickNumber,
+        totalTricks: TOTAL_TRICKS,
+        isJokerCallActive: this.state.isJokerCallActive,
+      }),
+    });
   }
 
   /**
