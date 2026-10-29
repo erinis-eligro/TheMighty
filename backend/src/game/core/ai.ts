@@ -236,3 +236,19 @@ export function selectCardToPlay({
   const chosen = pointDump ?? dump[0];
   return { cardId: chosen.id, reason: 'dump_low' };
 }
+
+/**
+ * AI president's friend choice: call the mighty if somebody else holds it,
+ * otherwise the joker, otherwise play alone.
+ */
+export function selectFriendDeclaration({
+  hand,
+  giruda,
+}: {
+  hand: Card[];
+  giruda: string;
+}): { type: 'MIGHTY' | 'JOKER' | 'NO_FRIEND' } {
+  if (!hand.some((c) => isMightyCard(c, giruda))) return { type: 'MIGHTY' };
+  if (!hand.some((c) => isJokerCard(c))) return { type: 'JOKER' };
+  return { type: 'NO_FRIEND' };
+}

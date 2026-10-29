@@ -46,6 +46,7 @@ export function SocketProvider({ children }: { children: React.ReactNode }) {
         friendDeclaration: data.friendDeclaration,
         friendIndex: data.friendIndex,
         friendPlayerId: data.friendPlayerId,
+        friendRevealed: data.friendRevealed ?? false,
         passCount: data.passCount,
         currentBid: data.currentBid,
         highestBid: data.highestBid,

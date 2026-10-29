@@ -19,6 +19,11 @@ export const GAME_EVENTS = {
   BID_PLACED: 'bid_placed',
   BID_ROUND_COMPLETE: 'bid_round_complete',
 
+  // Friend selection
+  DECLARE_FRIEND: 'declare_friend',
+  FRIEND_DECLARED: 'friend_declared',
+  FRIEND_REVEALED: 'friend_revealed',
+
   // Kitty exchange
   EXCHANGE_KITTY: 'exchange_kitty',
   KITTY_EXCHANGED: 'kitty_exchanged',

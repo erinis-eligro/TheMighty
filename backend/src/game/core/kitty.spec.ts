@@ -121,7 +121,7 @@ test('discarded point cards do not count for either team', () => {
   const engine = kittyEngine();
   engine.exchangeKitty('p2', { discardCardIds: pick(engine) });
   assert.ok(engine.state.players.every((p) => p.collectedScoreCards.length === 0 && p.score === 0));
-  engine.selectFriend({ type: 'NO_FRIEND' });
+  engine.declareFriend('p2', { type: 'NO_FRIEND' });
   assert.equal(engine.state.phase, 'TRICK_PLAYING');
 });
 

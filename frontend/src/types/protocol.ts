@@ -75,6 +75,17 @@ export interface ExchangeKittyRequest {
   bidScore?: number;
 }
 
+export interface DeclareFriendRequest {
+  roomId: string;
+  playerId: string;
+  /** NO_FRIEND | FIRST_TRICK | MIGHTY | JOKER | CARD */
+  type: string;
+  /** Required when type is CARD. */
+  suit?: string;
+  /** Required when type is CARD. */
+  rank?: string;
+}
+
 export interface PlayCardRequest {
   roomId: string;
   playerId: string;
@@ -91,6 +102,7 @@ export interface ClientToServerEvents {
   start_game: (payload: StartGameRequest, ack?: AckFn<RoomIdAckData>) => void;
   place_bid: (payload: PlaceBidRequest, ack?: AckFn<RoomAckData>) => void;
   exchange_kitty: (payload: ExchangeKittyRequest, ack?: AckFn<RoomAckData>) => void;
+  declare_friend: (payload: DeclareFriendRequest, ack?: AckFn<RoomAckData>) => void;
   play_card: (payload: PlayCardRequest, ack?: AckFn<RoomAckData>) => void;
 }
 
