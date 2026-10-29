@@ -15,6 +15,7 @@ import {
   GIRUDA_BASE_STRENGTH,
   MIN_BID,
   MAX_BID,
+  KITTY_SIZE,
   Suit,
   SUITS,
   Rank,
@@ -112,6 +113,29 @@ export function selectBid({
   }
 
   return { bid: null, giruda: null, reason: 'pass' };
+}
+
+/**
+ * Picks the 3 cards the AI president discards from its 13 cards (hand + kitty):
+ * the weakest ones, never the joker, the mighty or a point card unless unavoidable,
+ * and giruda cards last. The giruda is kept as bid.
+ */
+export function selectKittyDiscard({
+  cards,
+  giruda,
+}: {
+  cards: Card[];
+  giruda: string;
+}): { discardCardIds: string[] } {
+  const keepValue = (c: Card): number => {
+    if (isJokerCard(c) || isMightyCard(c, giruda)) return 1000;
+    return cardPlayStrength(c, giruda) + (isPointCard(c) ? 30 : 0);
+  };
+  const discardCardIds = [...cards]
+    .sort((a, b) => keepValue(a) - keepValue(b))
+    .slice(0, KITTY_SIZE)
+    .map((c) => c.id);
+  return { discardCardIds };
 }
 
 function cardPlayStrength(card: Card, giruda: string, jokerPowerless = false): number {
@@ -249,4 +273,20 @@ export function selectCardToPlay({
   const pointDump = dump.find((c) => isPointCard(c));
   const chosen = pointDump ?? dump[0];
   return { cardId: chosen.id, reason: 'dump_low' };
+}
+
+/**
+ * AI president's friend choice: call the mighty if somebody else holds it,
+ * otherwise the joker, otherwise play alone.
+ */
+export function selectFriendDeclaration({
+  hand,
+  giruda,
+}: {
+  hand: Card[];
+  giruda: string;
+}): { type: 'MIGHTY' | 'JOKER' | 'NO_FRIEND' } {
+  if (!hand.some((c) => isMightyCard(c, giruda))) return { type: 'MIGHTY' };
+  if (!hand.some((c) => isJokerCard(c))) return { type: 'JOKER' };
+  return { type: 'NO_FRIEND' };
 }

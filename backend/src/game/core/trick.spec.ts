@@ -156,14 +156,20 @@ function makePlayers(): Player[] {
   }));
 }
 
+/** Kitty exchange (president p0 discards 3 cards) and a no-friend declaration. */
+function exchangeAndDeclareNoFriend(engine: GameEngine): void {
+  const president = engine.state.players.find((p) => p.id === 'p0')!;
+  engine.exchangeKitty('p0', { discardCardIds: president.hand.slice(0, 3).map((c) => c.id) });
+  engine.declareFriend('p0', { type: 'NO_FRIEND' });
+}
+
 /** An engine in TRICK_PLAYING (trick `trickNumber`) with hands set up by the test. */
 function engineWith(giruda: string, hands: Card[][], trickNumber: number): GameEngine {
   const engine = new GameEngine({ players: makePlayers(), giruda: 'NO_GIRUDA' });
   engine.deal();
   engine.placeBid('p0', { score: 13, giruda });
   for (const id of ['p1', 'p2', 'p3', 'p4']) engine.placeBid(id, { pass: true });
-  engine.completeKittyExchange();
-  engine.selectFriend({ type: 'NO_FRIEND' });
+  exchangeAndDeclareNoFriend(engine);
   engine.state.players.forEach((p, i) => (p.hand = hands[i]));
   engine.state.currentTrickNumber = trickNumber;
   (engine as unknown as { _trickNumber: number })._trickNumber = trickNumber;
@@ -297,8 +303,7 @@ test('AI self-play: full games always finish with legal plays', () => {
     engine.deal();
     engine.placeBid('p0', { score: 13, giruda: (['SPADE', 'CLUB', 'HEART', 'DIAMOND', 'NO_GIRUDA'] as const)[g % 5] });
     for (const id of ['p1', 'p2', 'p3', 'p4']) engine.placeBid(id, { pass: true });
-    engine.completeKittyExchange();
-    engine.selectFriend({ type: 'NO_FRIEND' });
+    exchangeAndDeclareNoFriend(engine);
 
     let guard = 0;
     while (engine.state.phase === 'TRICK_PLAYING' && guard++ < 100) {

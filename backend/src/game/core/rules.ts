@@ -23,6 +23,8 @@ export const RANK_STRENGTH: Record<Rank, number> = {
 export const POINT_RANKS = ['10', 'J', 'Q', 'K', 'A'] as const;
 export const MIN_BID = 13;
 export const MAX_BID = 20;
+/** Minimum bid raise required when the president changes the giruda in the kitty exchange. */
+export const GIRUDA_CHANGE_RAISE = 2;
 export const TOTAL_TRICKS = 10;
 export const CARDS_PER_PLAYER = 10;
 export const KITTY_SIZE = 3;
