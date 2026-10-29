@@ -4,16 +4,19 @@ import { Card } from './Card';
 import { useGameStore, type Card as CardType } from '@/store/useGameStore';
 
 export function UserHand() {
-  const { playerId, currentTurnIndex, phase, roomId, playableCardIds } = useGameStore();
-  const player = useGameStore.getState().players.find((p: { id: string }) => p.id === playerId);
-  const isMyTurn = useGameStore.getState().players[currentTurnIndex]?.id === playerId;
+  const playerId = useGameStore((s) => s.playerId);
+  const roomId = useGameStore((s) => s.roomId);
+  const phase = useGameStore((s) => s.phase);
+  const playableCardIds = useGameStore((s) => s.playableCardIds);
+  const socket = useGameStore((s) => s.socket);
+  const player = useGameStore((s) => s.players.find((p) => p.id === s.playerId));
+  const isMyTurn = useGameStore((s) => s.players[s.currentTurnIndex]?.id === s.playerId);
 
   if (!player) return null;
 
   const selectable = phase === 'TRICK_PLAYING' && isMyTurn;
 
   const handleSelect = (cardId: string) => {
-    const socket = useGameStore.getState().socket;
     if (!socket) return;
     socket.emit('play_card', { roomId, playerId, cardId });
   };

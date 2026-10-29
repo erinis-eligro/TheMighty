@@ -70,13 +70,27 @@ export type Trick = {
   winnerIndex?: number;
 };
 
+export type PlayerRole = 'OWNER' | 'FRIEND' | 'OPPOSER';
+
+/** Scored outcome the server attaches to `state_sync` once the phase is GAME_OVER. */
+export type RoundResult = {
+  isWin: boolean;
+  bidScore: number;
+  giruda: BidGiruda;
+  teamPoints: number;
+  opponentPoints: number;
+  ownerPlayerId: string;
+  friendPlayerId: string | null;
+  players: { playerId: string; role: PlayerRole; points: number }[];
+};
+
 /** Fields the server sends with every `state_sync` (already masked for this player). */
 type SyncedState = Pick<
   GameState,
   | 'roomId' | 'phase' | 'currentTurnIndex' | 'turnPlayerId' | 'players' | 'currentTrick' | 'trickHistory'
   | 'currentTrickNumber' | 'leadSuit' | 'isJokerCallActive' | 'kitty' | 'giruda' | 'ownerPlayerId'
   | 'presidentIndex' | 'friendDeclaration' | 'friendIndex' | 'friendPlayerId' | 'friendRevealed'
-  | 'passCount' | 'currentBid' | 'highestBid' | 'bidLeader' | 'playableCardIds'
+  | 'passCount' | 'currentBid' | 'highestBid' | 'bidLeader' | 'playableCardIds' | 'result'
 >;
 
 interface GameState {
@@ -110,6 +124,8 @@ interface GameState {
   bidLeader?: string;
   /** Card ids the server says the viewer may play now (empty unless it is his turn). */
   playableCardIds: string[];
+  /** Final scoring, only present in GAME_OVER. */
+  result: RoundResult | null;
   isConnected: boolean;
   /** Last socket connection failure (cleared on connect); shown by the connection banner. */
   connectionError: string | null;
@@ -128,14 +144,6 @@ interface GameState {
   /** Leaves (deletes) the single-player room and forgets the stored session. */
   leaveRoom: () => void;
   setRoom: (roomId: string, playerId: string, username: string) => void;
-  setPlayers: (players: Player[]) => void;
-  setPhase: (phase: GamePhase) => void;
-  setTurn: (playerId: string) => void;
-  setCurrentTrick: (trick: Trick | null) => void;
-  addTrick: (trick: Trick) => void;
-  setKitty: (cards: Card[]) => void;
-  setGiruda: (giruda: string) => void;
-  setBid: (bid: number, leader?: string) => void;
   setError: (error: string | null) => void;
   reset: () => void;
 }
@@ -165,6 +173,7 @@ export const useGameStore = create<GameState>((set, get) => ({
   currentBid: 0,
   highestBid: null,
   playableCardIds: [],
+  result: null,
   isConnected: false,
   connectionError: null,
   error: null,
@@ -186,7 +195,12 @@ export const useGameStore = create<GameState>((set, get) => ({
     );
     // The server state is the single source of truth: it replaces the whole game view.
     socket.on('state_sync', (data: SyncedState) =>
-      set({ ...data, friendRevealed: data.friendRevealed ?? false, playableCardIds: data.playableCardIds ?? [] }),
+      set({
+        ...data,
+        friendRevealed: data.friendRevealed ?? false,
+        playableCardIds: data.playableCardIds ?? [],
+        result: data.result ?? null,
+      }),
     );
     socket.on('player_left', (data: { playerId: string }) =>
       set((s) => ({ players: s.players.filter((p) => p.id !== data.playerId) })),
@@ -241,19 +255,11 @@ export const useGameStore = create<GameState>((set, get) => ({
     set({ roomId: '', playerId: '' });
   },
   setRoom: (roomId, playerId, username) => set({ roomId, playerId, username }),
-  setPlayers: (players) => set({ players }),
-  setPhase: (phase) => set({ phase }),
-  setTurn: (turnPlayerId) => set({ turnPlayerId }),
-  setCurrentTrick: (currentTrick) => set({ currentTrick }),
-  addTrick: (trick) => set((s) => ({ trickHistory: [...s.trickHistory, trick] })),
-  setKitty: (kitty) => set({ kitty }),
-  setGiruda: (giruda) => set({ giruda }),
-  setBid: (currentBid, bidLeader) => set({ currentBid, bidLeader }),
   setError: (error) => set({ error }),
   reset: () => set({
     phase: 'READY', players: [], currentTrick: null, trickHistory: [], currentTrickNumber: 0,
     currentTurnIndex: 0, turnPlayerId: '', leadSuit: null, isJokerCallActive: false, kitty: [],
     presidentIndex: null, friendDeclaration: null, friendIndex: null, friendPlayerId: undefined, friendRevealed: false,
-    passCount: 0, currentBid: 0, highestBid: null, bidLeader: undefined, playableCardIds: [], error: null,
+    passCount: 0, currentBid: 0, highestBid: null, bidLeader: undefined, playableCardIds: [], result: null, error: null,
   }),
 }));

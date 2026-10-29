@@ -13,9 +13,11 @@ const SEAT_OFFSET: Record<string, { left: string; top: string }> = {
 };
 
 export function TrickBoard() {
-  const { currentTrick, trickHistory, currentTurnIndex, playerId, players } = useGameStore();
-  const currentPlayer = players[currentTurnIndex] as PlayerType | undefined;
-  const isMyTurn = currentPlayer?.id === playerId;
+  const currentTrick = useGameStore((s) => s.currentTrick);
+  const trickHistory = useGameStore((s) => s.trickHistory);
+  const players = useGameStore((s) => s.players);
+  const currentPlayer = useGameStore((s) => s.players[s.currentTurnIndex]);
+  const isMyTurn = useGameStore((s) => s.players[s.currentTurnIndex]?.id === s.playerId);
 
   return (
     <div className="relative w-full h-[320px] flex items-center justify-center">
