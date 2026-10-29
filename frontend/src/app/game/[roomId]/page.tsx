@@ -57,6 +57,13 @@ export default function GamePage({ params }: { params: { roomId: string } }) {
   const rejoinRoom = useGameStore((s) => s.rejoinRoom);
   const leaveRoom = useGameStore((s) => s.leaveRoom);
 
+  // Server errors (game_error / failed acks) are shown as a toast that disappears by itself.
+  useEffect(() => {
+    if (!error) return;
+    const timer = setTimeout(() => setError(null), 3000);
+    return () => clearTimeout(timer);
+  }, [error, setError]);
+
   // Game state arrives only through the store's `state_sync` listener (server is the source of truth).
   // This page just makes sure the socket holds the seat of this room and asks the server to deal.
   useEffect(() => {
@@ -138,7 +145,7 @@ export default function GamePage({ params }: { params: { roomId: string } }) {
       {error && (
         <div
           role="alert"
-          className="max-w-7xl mx-auto mb-4 p-3 bg-[#FEE2E2] rounded-lg text-sm text-[#991B1B] flex items-center justify-between"
+          className="fixed top-4 left-1/2 -translate-x-1/2 z-[60] max-w-[90vw] p-3 bg-[#FEE2E2] rounded-xl shadow-lg text-sm text-[#991B1B] flex items-center justify-between"
         >
           <span>{error}</span>
           <button onClick={() => setError(null)} className="ml-4 font-bold" aria-label="닫기">×</button>

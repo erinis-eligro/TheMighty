@@ -133,6 +133,8 @@ export class GameGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
       currentTrickNumber: engine.state.currentTrickNumber,
       leadSuit: engine.state.leadSuit,
       isJokerCallActive: engine.state.isJokerCallActive,
+      // Public rule info (depends only on the giruda): lets the leader's UI offer the joker call.
+      jokerCallCard: engine.jokerCallCard,
       // The kitty (bottom cards, later the president's discards) is only visible to the president.
       kitty:
         forPlayerId === engine.state.ownerPlayerId && engine.state.phase !== 'BIDDING'
