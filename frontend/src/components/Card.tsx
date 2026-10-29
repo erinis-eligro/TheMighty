@@ -6,6 +6,8 @@ import { useGameStore, type Card as CardType, type Player as PlayerType } from '
 type CardProps = {
   card: CardType;
   selectable: boolean;
+  /** Marks the card as picked by the user (e.g. kitty discard); independent of `selectable`. */
+  selected?: boolean;
   onSelect: (cardId: string) => void;
 };
 
@@ -25,7 +27,7 @@ const SUIT_COLOR: Record<string, string> = {
   JOKER: '#6366f1',
 };
 
-export function Card({ card, selectable, onSelect }: CardProps) {
+export function Card({ card, selectable, selected = false, onSelect }: CardProps) {
   const isMyTurn = useGameStore((s) => s.players[s.currentTurnIndex]?.id === s.playerId);
   const isHidden = card.hidden || false;
   const suitColor = card.isJoker ? '#6366f1' : SUIT_COLOR[card.suit] ?? '#000000';
@@ -44,6 +46,7 @@ export function Card({ card, selectable, onSelect }: CardProps) {
         relative w-20 h-28 rounded-xl shadow-lg border-2
         ${isHidden ? 'bg-[#CBD5E1] border-[#94A3B8]' : 'bg-white border-transparent'}
         ${selectable && isMyTurn && !isHidden ? 'border-[#8B5CF6] ring-2 ring-[#8B5CF6] scale-110' : ''}
+        ${selected ? '!border-[#F472B6] ring-4 ring-[#F472B6]' : ''}
         flex flex-col items-center justify-between p-2 transition-all duration-200
         ${!selectable || !isMyTurn ? 'opacity-60 pointer-events-none' : 'opacity-100 cursor-pointer'}
       `}

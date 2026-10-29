@@ -74,6 +74,8 @@ export interface PlaceBidRequest {
   /** Optional: the server identifies the player by the socket; if sent it must match. */
   playerId?: string;
   bid?: number;
+  /** SPADE | DIAMOND | HEART | CLUB | NO_GIRUDA. Required unless passing. */
+  giruda?: string;
   pass?: boolean;
 }
 
