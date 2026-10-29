@@ -7,25 +7,30 @@ import { useGameStore, type Player as PlayerType, type Trick as TrickType } from
 
 type Seat = PlayerType['seat'];
 
-/** Card position (px from the board centre) per seat; the board cards are drawn at 70% size. */
+/**
+ * Card position per seat as a percentage of one board card's own size (framer-motion translates `%` relative to
+ * the element), so the layout scales with the responsive card size instead of using fixed px.
+ */
 const SEAT_OFFSET: Record<Seat, { x: number; y: number }> = {
-  bottom: { x: 0, y: 75 },
-  top: { x: -30, y: -75 },
-  left: { x: -100, y: 0 },
-  right: { x: 100, y: 0 },
-  center: { x: 65, y: -80 },
+  bottom: { x: 0, y: 100 },
+  top: { x: -50, y: -100 },
+  left: { x: -150, y: 0 },
+  right: { x: 150, y: 0 },
+  center: { x: 100, y: -110 },
 };
+
+const pct = ({ x, y }: { x: number; y: number }) => ({ x: `${x}%`, y: `${y}%` });
 
 /** Where a card comes from / goes to: the seat's position pushed out past the board edge. */
 function farOffset(seat: Seat) {
   const { x, y } = SEAT_OFFSET[seat];
-  return { x: x * 2.6, y: seat === 'bottom' ? 230 : y * 2.6 };
+  return pct({ x: x * 2.6, y: seat === 'bottom' ? 300 : y * 2.6 });
 }
 
 const cardVariants = {
   // A played card flies in from the seat of the player who played it.
   enter: (seat: Seat) => ({ ...farOffset(seat), opacity: 0, scale: 0.5 }),
-  show: (seat: Seat) => ({ ...SEAT_OFFSET[seat], opacity: 1, scale: 1 }),
+  show: (seat: Seat) => ({ ...pct(SEAT_OFFSET[seat]), opacity: 1, scale: 1 }),
   // After the 1.5s hold (server TRICK_RESOLVED) the five cards are swept towards the winner.
   collect: (winnerSeat: Seat) => ({ ...farOffset(winnerSeat), opacity: 0, scale: 0.4, transition: { duration: 0.5 } }),
 };
@@ -45,8 +50,8 @@ export function TrickBoard() {
   const winnerSeat = seatOf(trickHistory[trickHistory.length - 1]?.winnerPlayerId);
 
   return (
-    <div className="relative w-full h-[320px] flex items-center justify-center">
-      <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 w-[460px] h-[280px] max-w-full rounded-2xl bg-pastel-bg/60 border-2 border-dashed border-pastel-border">
+    <div className="relative w-full h-64 md:h-80 flex items-center justify-center md:absolute md:inset-x-0 md:top-1/2 md:-translate-y-1/2">
+      <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 w-full max-w-lg h-56 md:h-72 rounded-2xl bg-pastel-bg/60 border-2 border-dashed border-pastel-border">
         {(!currentTrick || currentTrick.cards.length === 0) && (
           <div className="absolute inset-0 flex items-center justify-center text-pastel-muted text-sm">카드를 기다리는 중...</div>
         )}
@@ -78,12 +83,10 @@ export function TrickBoard() {
                   animate="show"
                   exit="collect"
                   transition={{ type: 'spring', stiffness: 220, damping: 24 }}
-                  className="absolute -left-10 -top-14"
+                  className="absolute -left-6 -top-[2.125rem] md:-left-7 md:-top-10 w-card-w-xs h-card-h-xs md:w-card-w-sm md:h-card-h-sm"
                   style={{ zIndex: i, rotate: (i - 2) * 3 }}
                 >
-                  <div className="origin-center scale-[0.7]">
-                    <Card card={play.card} selectable={false} inert onSelect={() => {}} />
-                  </div>
+                  <Card card={play.card} selectable={false} inert size="fill" onSelect={() => {}} />
                 </motion.div>
               );
             })}
@@ -91,27 +94,28 @@ export function TrickBoard() {
         </div>
       </div>
 
-      <AnimatePresence>
-        {trickHistory.slice(-3).map((t: TrickType, idx: number) => {
-          const winner = players.find((p: PlayerType) => p.id === t.winnerPlayerId);
-          return (
-            <motion.div
-              key={t.id}
-              initial={{ opacity: 0, y: 20 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -20 }}
-              className="absolute bottom-4 text-xs font-medium text-pastel-muted flex items-center gap-1"
-              style={{ right: `${40 + idx * 44}px` }}
-            >
-              {winner ? (
-                <>
-                  <span className="font-bold text-pastel-text">{winner.username}</span> 승
-                </>
-              ) : null}
-            </motion.div>
-          );
-        })}
-      </AnimatePresence>
+      <div className="absolute bottom-1 right-2 md:bottom-4 md:right-10 flex flex-row-reverse items-center gap-3 md:gap-4">
+        <AnimatePresence>
+          {trickHistory.slice(-3).map((t: TrickType) => {
+            const winner = players.find((p: PlayerType) => p.id === t.winnerPlayerId);
+            return (
+              <motion.div
+                key={t.id}
+                initial={{ opacity: 0, y: 20 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -20 }}
+                className="text-xs font-medium text-pastel-muted flex items-center gap-1"
+              >
+                {winner ? (
+                  <>
+                    <span className="font-bold text-pastel-text">{winner.username}</span> 승
+                  </>
+                ) : null}
+              </motion.div>
+            );
+          })}
+        </AnimatePresence>
+      </div>
 
       {phase === 'TRICK_RESOLVED' && currentTrick?.winnerPlayerId && (
         <div className="absolute top-2 left-1/2 -translate-x-1/2 bg-pastel-ok text-pastel-okText px-4 py-1 rounded-full text-sm font-semibold">
@@ -120,7 +124,7 @@ export function TrickBoard() {
       )}
 
       {isMyTurn && currentPlayer && phase === 'TRICK_PLAYING' && (
-        <div className="absolute bottom-8 left-1/2 transform -translate-x-1/2 bg-pastel-accentHover text-white px-5 py-2 rounded-full shadow-lg text-sm font-semibold animate-pulse whitespace-nowrap">
+        <div className="absolute bottom-6 md:bottom-8 left-1/2 transform -translate-x-1/2 bg-pastel-accentHover text-white px-5 py-2 rounded-full shadow-lg text-sm font-semibold animate-pulse whitespace-nowrap">
           당신의 턴입니다
         </div>
       )}
