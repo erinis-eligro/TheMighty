@@ -6,6 +6,9 @@ import {
   isPointCard,
   cardBaseStrength,
   JOKER_STRENGTH,
+  POWERLESS_JOKER_STRENGTH,
+  SUITS,
+  Suit,
   MIGHTY_STRENGTH,
   GIRUDA_BASE_STRENGTH,
 } from './rules';
@@ -15,48 +18,84 @@ export interface PlayValidation {
   reason?: string;
 }
 
+/**
+ * Validates one card play.
+ *
+ * - `trickNumber` is the 1-based number of the trick being played (1..totalTricks),
+ *   not a per-player turn counter.
+ * - `isLeading` is true when the player opens the trick; `leadSuit` is the suit led by the
+ *   leader (undefined while leading, or when a joker led the last trick without naming a suit).
+ * - `isJokerCallActive` means the joker call was already declared in the current trick
+ *   (by the leader). Only then must the holder of the joker-call card play it.
+ * - `declaresJokerCall` is the leader declaring the joker call; it requires leading with the
+ *   joker-call card.
+ * - `jokerLeadSuit` is the suit named by a leader who leads with the joker.
+ *
+ * The joker is exempt from following suit. The mighty is an ordinary card of its own suit for
+ * follow-suit purposes. On the first/last trick and in a joker-call trick the joker may be
+ * played but has no power (see `isJokerPowerless`); it cannot lead the first trick.
+ */
 export function validatePlay({
   card,
   hand,
   leadSuit,
-  turnNumber,
+  isLeading = leadSuit === undefined,
+  trickNumber,
   totalTricks,
   giruda,
-  jokerCallCard,
+  isJokerCallActive = false,
+  declaresJokerCall = false,
+  jokerLeadSuit,
 }: {
   card: Card;
   hand: Card[];
   leadSuit?: string;
-  turnNumber: number;
+  isLeading?: boolean;
+  trickNumber: number;
   totalTricks: number;
   giruda: string;
-  jokerCallCard?: { suit: string; rank: string };
+  isJokerCallActive?: boolean;
+  declaresJokerCall?: boolean;
+  jokerLeadSuit?: string;
 }): PlayValidation {
   const inHand = hand.some((c) => c.id === card.id);
   if (!inHand) {
     return { valid: false, reason: 'card_not_in_hand' };
   }
 
-  if (isJokerCard(card)) {
-    if (turnNumber === 1 || turnNumber === totalTricks) {
-      return { valid: false, reason: 'joker_not_allowed_first_or_last_trick' };
+  if (isLeading) {
+    if (declaresJokerCall && !isJokerCallCard(card, giruda)) {
+      return { valid: false, reason: 'joker_call_requires_joker_call_card' };
     }
-  }
-
-  if (jokerCallCard && isJokerCallCard(card, giruda)) {
+    if (isJokerCard(card)) {
+      if (trickNumber === 1) {
+        return { valid: false, reason: 'joker_cannot_lead_first_trick' };
+      }
+      // On the last trick the joker is the leader's only card, so naming a suit is optional.
+      const needsSuit = trickNumber !== totalTricks;
+      if (jokerLeadSuit !== undefined ? !SUITS.includes(jokerLeadSuit as Suit) : needsSuit) {
+        return { valid: false, reason: 'joker_lead_suit_required' };
+      }
+    }
     return { valid: true };
   }
 
-  if (jokerCallCard) {
-    const hasJokerCall = hand.some((c) => isJokerCallCard(c, giruda));
-    if (hasJokerCall && !isJokerCallCard(card, giruda)) {
+  if (declaresJokerCall) {
+    return { valid: false, reason: 'joker_call_only_when_leading' };
+  }
+
+  if (isJokerCallActive) {
+    if (isJokerCallCard(card, giruda)) {
+      return { valid: true };
+    }
+    if (hand.some((c) => isJokerCallCard(c, giruda))) {
       return { valid: false, reason: 'must_play_joker_call_card' };
     }
   }
 
-  if (leadSuit) {
+  if (leadSuit && !isJokerCard(card)) {
     const hasLeadSuit = hand.some((c) => c.suit === leadSuit && !isJokerCard(c));
-    if (hasLeadSuit && card.suit !== leadSuit && !isJokerCard(card)) {
+    if (hasLeadSuit && card.suit !== leadSuit) {
       return { valid: false, reason: 'must_follow_lead_suit' };
     }
   }
@@ -75,11 +114,14 @@ export function determineTrickWinner({
   leadSuit,
   giruda,
   mightyCard,
+  jokerPowerless = false,
 }: {
   plays: { playerId: string; card: Card }[];
   leadSuit?: string;
   giruda: string;
   mightyCard: { suit: string; rank: string };
+  /** The joker is the weakest card of this trick (first/last trick or joker call). */
+  jokerPowerless?: boolean;
 }): TrickResult {
   let best: { playerId: string; card: Card; strength: number } | null = null;
 
@@ -87,10 +129,10 @@ export function determineTrickWinner({
     const { card, playerId } = play;
     let strength = 0;
 
-    if (isJokerCard(card)) {
-      strength = JOKER_STRENGTH;
-    } else if (isMightyCard(card, giruda)) {
+    if (isMightyCard(card, giruda)) {
       strength = MIGHTY_STRENGTH;
+    } else if (isJokerCard(card)) {
+      strength = jokerPowerless ? POWERLESS_JOKER_STRENGTH : JOKER_STRENGTH;
     } else if (card.suit === giruda) {
       strength = GIRUDA_BASE_STRENGTH + cardBaseStrength(card);
     } else if (leadSuit && card.suit === leadSuit) {

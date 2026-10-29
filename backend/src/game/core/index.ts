@@ -11,6 +11,7 @@ export {
   isMightyCard,
   isJokerCard,
   isJokerCallCard,
+  isJokerPowerless,
   isPointCard,
   getPointValue,
   cardBaseStrength,

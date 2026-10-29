@@ -28,6 +28,7 @@ import {
   selectKittyDiscard,
   type FriendReveal,
   generateAiName,
+  TOTAL_TRICKS,
 } from './core';
 import { Role, Giruda } from '@prisma/client';
 
@@ -195,13 +196,17 @@ export class GameGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
             leadSuit: engine.state.currentTrick?.leadSuit,
             currentTrickPlays,
             giruda: engine.state.giruda as string,
-            turnNumber: engine.state.currentTrickNumber,
-            totalTricks: 10,
+            trickNumber: engine.state.currentTrickNumber,
+            totalTricks: TOTAL_TRICKS,
             isPartnerWinningCurrentTrick: isPartnerWinning,
             mightyCard: engine.mightyCard,
             jokerCallCard: engine.jokerCallCard,
+            isJokerCallActive: engine.state.isJokerCallActive,
           });
-          const result = engine.playCard(turnPlayer.id, decision.cardId);
+          const result = engine.playCard(turnPlayer.id, decision.cardId, {
+            jokerCall: decision.jokerCall,
+            jokerLeadSuit: decision.jokerLeadSuit,
+          });
           this.server.to(roomId).emit(GAME_EVENTS.CARD_PLAYED, {
             roomId,
             playerId: turnPlayer.id,
@@ -496,7 +501,10 @@ export class GameGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
     if (!player || player.isAi) throw new WsException({ code: 'INVALID_PLAYER', message: 'Only human can play card' });
     if (engine.state.players[engine.state.currentTurnIndex]?.id !== player.id) throw new WsException({ code: 'NOT_YOUR_TURN', message: 'Not your turn' });
 
-    const result = engine.playCard(dto.playerId, dto.cardId);
+    const result = engine.playCard(dto.playerId, dto.cardId, {
+      jokerCall: dto.jokerCall,
+      jokerLeadSuit: dto.jokerLeadSuit,
+    });
 
     this.server.to(dto.roomId).emit(GAME_EVENTS.CARD_PLAYED, {
       roomId: dto.roomId,

@@ -1,4 +1,4 @@
-import { Card, Player, GameState, GamePhase, Trick, FriendDeclaration, BidGiruda } from '../entities/game.entity';
+import { Card, Player, GameState, GamePhase, Trick, FriendDeclaration, BidGiruda, Suit } from '../entities/game.entity';
 import { SeatPosition } from '../constants';
 import { createDeck, shuffleDeck, validateDeck } from './deck';
 import { dealCards } from './deal';
@@ -9,6 +9,8 @@ import {
   getMightyCard,
   getJokerCallCard,
   isJokerCallCard,
+  isJokerCard,
+  isJokerPowerless,
   isPointCard,
   TOTAL_TRICKS,
   MAX_BID,
@@ -465,9 +467,17 @@ export class GameEngine {
     return { friendPlayerId: this.state.friendPlayerId ?? null, friendIndex, reason };
   }
 
+  /**
+   * Plays a card for the current player.
+   *
+   * @param options.jokerCall The leader declares the joker call (requires leading with the
+   *   joker-call card). While active, the joker has no power and the joker-call card must be played.
+   * @param options.jokerLeadSuit Suit the leader names when leading with the joker.
+   */
   playCard(
     playerId: string,
-    cardId: string
+    cardId: string,
+    options: { jokerCall?: boolean; jokerLeadSuit?: string } = {}
   ): { valid: boolean; trickComplete?: boolean; trick?: Trick; points?: number; friendRevealed?: FriendReveal } {
     if (this.state.phase !== 'TRICK_PLAYING') {
       throw new Error('Not in playing phase');
@@ -488,18 +498,20 @@ export class GameEngine {
       throw new Error('Card not in hand');
     }
 
-    const leadSuit = this.state.currentTrick
-      ? this.state.currentTrick.leadSuit
-      : undefined;
+    const isLeading = !this.state.currentTrick;
+    const leadSuit = this.state.currentTrick ? this.state.currentTrick.leadSuit : undefined;
 
     const validation = validatePlay({
       card,
       hand: player.hand,
       leadSuit,
-      turnNumber: this._trickNumber,
+      isLeading,
+      trickNumber: this._trickNumber,
       totalTricks: TOTAL_TRICKS,
       giruda: this.state.giruda as string,
-      jokerCallCard: this._jokerCallCard,
+      isJokerCallActive: this.state.isJokerCallActive,
+      declaresJokerCall: options.jokerCall === true,
+      jokerLeadSuit: options.jokerLeadSuit,
     });
 
     if (!validation.valid) {
@@ -508,19 +520,23 @@ export class GameEngine {
 
     player.hand = player.hand.filter((c) => c.id !== cardId);
 
-    if (!this.state.currentTrick) {
-      this.state.currentTrick = {
+    let trick = this.state.currentTrick;
+    if (!trick) {
+      // A joker has no suit of its own: the leader names the suit to follow.
+      const ledSuit = (isJokerCard(card) ? options.jokerLeadSuit : card.suit) as Suit | undefined;
+      trick = {
         id: `trick_${this._trickNumber}`,
         trickNumber: this._trickNumber,
         cards: [],
-        leadSuit: card.suit as any,
+        leadSuit: ledSuit,
         winnerPlayerId: undefined,
       };
-      this.state.leadSuit = card.suit as any;
-      this.state.isJokerCallActive = isJokerCallCard(card, this.state.giruda as string);
+      this.state.currentTrick = trick;
+      this.state.leadSuit = ledSuit ?? null;
+      this.state.isJokerCallActive = options.jokerCall === true;
     }
 
-    this.state.currentTrick.cards.push({ playerId, playerIndex, card });
+    trick.cards.push({ playerId, playerIndex, card });
 
     // The friend is revealed the moment the declared card is played.
     let friendRevealed: FriendReveal | undefined;
@@ -532,7 +548,7 @@ export class GameEngine {
       }
     }
 
-    if (this.state.currentTrick.cards.length === this.state.players.length) {
+    if (trick.cards.length === this.state.players.length) {
       const resolved = this.resolveTrick();
       return { ...resolved, friendRevealed: friendRevealed ?? resolved.friendRevealed };
     }
@@ -558,6 +574,11 @@ export class GameEngine {
       leadSuit: trick.leadSuit,
       giruda: this.state.giruda as string,
       mightyCard: this._mightyCard,
+      jokerPowerless: isJokerPowerless({
+        trickNumber: trick.trickNumber,
+        totalTricks: TOTAL_TRICKS,
+        isJokerCallActive: this.state.isJokerCallActive,
+      }),
     });
 
     const winnerIndex = this.indexOfPlayer(result.winnerPlayerId);
