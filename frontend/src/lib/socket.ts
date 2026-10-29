@@ -1,7 +1,7 @@
 import { io, type Socket } from 'socket.io-client';
 import { GAME_NAMESPACE, type Ack } from '@/types/protocol';
 
-const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL ?? 'http://localhost:3001';
+export const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL ?? 'http://localhost:3001';
 
 /** Connects to the backend `/game` namespace (must match GameGateway's namespace). */
 export function createGameSocket(url: string = BACKEND_URL): Socket {

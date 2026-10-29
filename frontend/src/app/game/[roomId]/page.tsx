@@ -1,72 +1,48 @@
 'use client';
 
 import { useEffect } from 'react';
+import { useRouter } from 'next/navigation';
 import { useGameStore, type Player as PlayerType } from '@/store/useGameStore';
 import { PlayerArea } from '@/components/PlayerArea';
 import { TrickBoard } from '@/components/TrickBoard';
 import { UserHand } from '@/components/UserHand';
 
 export default function GamePage({ params }: { params: { roomId: string } }) {
-  const { socket, roomId, playerId, players, phase, currentBid, isConnected, error, setError, setPhase, setPlayers, setTurn, setCurrentTrick } = useGameStore();
+  const router = useRouter();
+  const { socket, roomId, playerId, players, phase, currentBid, isConnected, error, setError } = useGameStore();
   const store = useGameStore.getState();
+  const rejoinRoom = useGameStore((s) => s.rejoinRoom);
+  const leaveRoom = useGameStore((s) => s.leaveRoom);
 
+  // Game state arrives only through the store's `state_sync` listener (server is the source of truth).
+  // This page just makes sure the socket holds the seat of this room and asks the server to deal.
   useEffect(() => {
-    if (!socket) return;
+    if (!socket || !isConnected) return;
+    let cancelled = false;
 
-    socket.on('deal_complete', (data: any) => {
-      setPhase('BIDDING');
-      setPlayers(data.players);
-      // Turn info comes from the following state_sync (backend-authoritative).
-    });
-
-    socket.on('game_started', (data: any) => {
-      setPlayers(data.players);
-    });
-
-    socket.on('bid_placed', (data: any) => {
-      store.setBid(data.bid ?? 0, data.bidLeader);
-      setPlayers(data.players);
-    });
-
-    socket.on('turn_complete', (data: any) => {
-      if (data.trick) {
-        store.addTrick(data.trick);
-        if (typeof data.trick.winnerIndex === 'number') {
-          useGameStore.setState({ currentTurnIndex: data.trick.winnerIndex });
-        }
-        setTurn(data.winnerPlayerId);
+    const enter = async () => {
+      // After a reload the store is empty: take the seat back with the stored rejoin token.
+      if (!useGameStore.getState().playerId && !(await rejoinRoom(params.roomId))) {
+        if (!cancelled) router.replace('/lobby');
+        return;
       }
-    });
+      // The server only deals once (idempotent); skip the request when the game is already running.
+      if (!cancelled && useGameStore.getState().phase === 'READY') {
+        socket.emit('start_game', { roomId: params.roomId });
+      }
+    };
+    void enter();
 
-    socket.on('state_sync', (data: any) => {
-      setPlayers(data.players);
-      useGameStore.setState({ currentTurnIndex: data.currentTurnIndex });
-      setTurn(data.turnPlayerId);
-      setCurrentTrick(data.currentTrick);
-      setPhase(data.phase);
-      if (data.kitty) store.setKitty(data.kitty);
-      if (data.giruda) store.setGiruda(data.giruda);
-      store.setBid(data.currentBid, data.bidLeader);
-    });
-
-    socket.on('game_end', (data: any) => {
-      setPhase('GAME_OVER');
+    const onGameEnd = (data: { humanWon: boolean; teamPoints: number; opponentPoints: number; bidScore: number }) => {
       alert(`게임 종료! ${data.humanWon ? '승리' : '패배'} (주공팀 ${data.teamPoints} / 야당 ${data.opponentPoints} / 비딩 ${data.bidScore})`);
-    });
-
-    // The server only deals once (idempotent); skip the request when the game is already running.
-    if (useGameStore.getState().phase === 'READY') socket.emit('start_game', { roomId });
+    };
+    socket.on('game_end', onGameEnd);
 
     return () => {
-      socket.off('deal_complete');
-      socket.off('game_started');
-      socket.off('bid_placed');
-      socket.off('card_played');
-      socket.off('turn_complete');
-      socket.off('state_sync');
-      socket.off('game_end');
+      cancelled = true;
+      socket.off('game_end', onGameEnd);
     };
-  }, [socket, roomId, setPhase, setPlayers, setTurn, setCurrentTrick, store]);
+  }, [socket, isConnected, params.roomId, rejoinRoom, router]);
 
   if (!isConnected) {
     return <div className="min-h-screen flex items-center justify-center">연결 중...</div>;
@@ -125,9 +101,8 @@ export default function GamePage({ params }: { params: { roomId: string } }) {
             <p className="text-[#6B7280] mb-6">결과를 확인하세요.</p>
             <button
               onClick={() => {
-                store.setPhase('READY');
-                store.setPlayers([]);
-                location.reload();
+                leaveRoom();
+                router.push('/lobby');
               }}
               className="w-full py-3 bg-[#8B5CF6] text-white rounded-xl font-semibold hover:bg-[#7C3AED] transition-colors"
             >

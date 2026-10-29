@@ -4,10 +4,6 @@ export const metadata: Metadata = {
   title: '마이티 (Mighty) - 로비',
 };
 
-export default function RootLayout({ children }: { children: React.ReactNode }) {
-  return (
-    <html lang="ko">
-      <body>{children}</body>
-    </html>
-  );
+export default function LobbyLayout({ children }: { children: React.ReactNode }) {
+  return <>{children}</>;
 }

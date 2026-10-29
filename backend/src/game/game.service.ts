@@ -6,6 +6,15 @@ import { GameSession, Player } from './entities/game.entity';
 import { SEAT_POSITIONS, SESSION_TTL_MS } from './constants';
 import { GameEngine, generateAiName } from './core';
 
+export interface UserStats {
+  username: string;
+  totalGames: number;
+  wins: number;
+  losses: number;
+  /** Percentage 0~100, rounded. */
+  winRate: number;
+}
+
 /**
  * Owns every game session (the single store of rooms). The gateway is only the transport:
  * it looks sessions up here, and the socket/timer bookkeeping lives on the session.
@@ -138,6 +147,20 @@ export class GameService implements OnModuleDestroy {
     this.cancelExpiry(session);
     this.sessions.delete(roomId);
     this.logger.log(`Session ${roomId} deleted`);
+  }
+
+  /** Win/lose summary shown in the lobby. An unknown nickname simply has no games yet. */
+  async getUserStats(username: string): Promise<UserStats> {
+    const user = await this.prisma.user.findUnique({ where: { username } });
+    const totalGames = user?.total_games ?? 0;
+    const wins = user?.win_count ?? 0;
+    return {
+      username,
+      totalGames,
+      wins,
+      losses: user?.lose_count ?? 0,
+      winRate: totalGames > 0 ? Math.round((wins / totalGames) * 100) : 0,
+    };
   }
 
   /**

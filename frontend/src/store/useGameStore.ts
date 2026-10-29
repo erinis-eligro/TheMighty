@@ -1,7 +1,8 @@
 import { create } from 'zustand';
 import type { Socket } from 'socket.io-client';
-import { createGameSocket } from '@/lib/socket';
-import type { GameErrorPayload } from '@/types/protocol';
+import { createGameSocket, emitWithAck } from '@/lib/socket';
+import { clearSession, loadSession, saveSession } from '@/lib/session';
+import type { CreateRoomAckData, GameErrorPayload, RoomAckData } from '@/types/protocol';
 
 export type Card = {
   id: string;
@@ -69,6 +70,15 @@ export type Trick = {
   winnerIndex?: number;
 };
 
+/** Fields the server sends with every `state_sync` (already masked for this player). */
+type SyncedState = Pick<
+  GameState,
+  | 'roomId' | 'phase' | 'currentTurnIndex' | 'turnPlayerId' | 'players' | 'currentTrick' | 'trickHistory'
+  | 'currentTrickNumber' | 'leadSuit' | 'isJokerCallActive' | 'kitty' | 'giruda' | 'ownerPlayerId'
+  | 'presidentIndex' | 'friendDeclaration' | 'friendIndex' | 'friendPlayerId' | 'friendRevealed'
+  | 'passCount' | 'currentBid' | 'highestBid' | 'bidLeader' | 'playableCardIds'
+>;
+
 interface GameState {
   socket: Socket | null;
   roomId: string;
@@ -101,11 +111,22 @@ interface GameState {
   /** Card ids the server says the viewer may play now (empty unless it is his turn). */
   playableCardIds: string[];
   isConnected: boolean;
+  /** Last socket connection failure (cleared on connect); shown by the connection banner. */
+  connectionError: string | null;
   error: string | null;
 
   setSocket: (socket: Socket) => void;
+  /** The one place that creates the game socket and registers the server event listeners. */
   connect: (url?: string) => void;
+  /** Reconnect manually after the automatic retries gave up or the user asks for it. */
+  retryConnection: () => void;
   disconnect: () => void;
+  /** create_room: resolves true once the room exists and credentials are stored for a rejoin. */
+  createRoom: (username: string) => Promise<boolean>;
+  /** join_room with the stored rejoin token; clears the stored session when the server refuses. */
+  rejoinRoom: (roomId?: string) => Promise<boolean>;
+  /** Leaves (deletes) the single-player room and forgets the stored session. */
+  leaveRoom: () => void;
   setRoom: (roomId: string, playerId: string, username: string) => void;
   setPlayers: (players: Player[]) => void;
   setPhase: (phase: GamePhase) => void;
@@ -119,7 +140,7 @@ interface GameState {
   reset: () => void;
 }
 
-export const useGameStore = create<GameState>((set) => ({
+export const useGameStore = create<GameState>((set, get) => ({
   socket: null,
   roomId: '',
   playerId: '',
@@ -145,21 +166,80 @@ export const useGameStore = create<GameState>((set) => ({
   highestBid: null,
   playableCardIds: [],
   isConnected: false,
+  connectionError: null,
   error: null,
 
   setSocket: (socket) => set({ socket }),
   connect: (url) => {
+    if (get().socket) return;
     const socket = createGameSocket(url);
-    socket.on('connect', () => set({ isConnected: true }));
+    socket.on('connect', () => {
+      set({ isConnected: true, connectionError: null });
+      // The server unbinds the seat on disconnect: take it back after an automatic reconnect.
+      if (get().playerId) void get().rejoinRoom(get().roomId);
+    });
     socket.on('disconnect', () => set({ isConnected: false }));
-    socket.on('connect_error', (err) => set({ error: err.message }));
+    socket.on('connect_error', (err) => set({ isConnected: false, connectionError: err.message }));
     socket.on('game_error', (e: GameErrorPayload) => set({ error: e.message }));
     socket.on('room_created', (data: { roomId: string; playerId: string }) =>
       set({ roomId: data.roomId, playerId: data.playerId, phase: 'READY' }),
     );
+    // The server state is the single source of truth: it replaces the whole game view.
+    socket.on('state_sync', (data: SyncedState) =>
+      set({ ...data, friendRevealed: data.friendRevealed ?? false, playableCardIds: data.playableCardIds ?? [] }),
+    );
+    socket.on('player_left', (data: { playerId: string }) =>
+      set((s) => ({ players: s.players.filter((p) => p.id !== data.playerId) })),
+    );
     set({ socket });
   },
-  disconnect: () => set((s) => { s.socket?.disconnect(); return { socket: null, isConnected: false }; }),
+  retryConnection: () => {
+    const { socket } = get();
+    if (socket && !socket.connected) {
+      set({ connectionError: null });
+      socket.connect();
+    }
+  },
+  disconnect: () => {
+    get().socket?.disconnect();
+    set({ socket: null, isConnected: false });
+  },
+  createRoom: async (username) => {
+    const { socket } = get();
+    if (!socket) return false;
+    get().reset();
+    const res = await emitWithAck<CreateRoomAckData>(socket, 'create_room', { username });
+    if (!res.ok) {
+      set({ error: res.error.message });
+      return false;
+    }
+    saveSession({ ...res.data, username });
+    set({ error: null, roomId: res.data.roomId, playerId: res.data.playerId, username });
+    return true;
+  },
+  rejoinRoom: async (roomId) => {
+    const { socket } = get();
+    const saved = loadSession();
+    if (!socket || !saved || (roomId && saved.roomId !== roomId)) return false;
+    const res = await emitWithAck<RoomAckData>(socket, 'join_room', {
+      roomId: saved.roomId,
+      rejoinToken: saved.rejoinToken,
+    });
+    if (!res.ok) {
+      clearSession();
+      set({ error: res.error.message, roomId: '', playerId: '' });
+      return false;
+    }
+    set({ error: null, roomId: res.data.roomId, playerId: res.data.playerId, username: saved.username });
+    return true;
+  },
+  leaveRoom: () => {
+    const { socket, roomId, playerId } = get();
+    if (socket && roomId) socket.emit('leave_room', { roomId, playerId });
+    clearSession();
+    get().reset();
+    set({ roomId: '', playerId: '' });
+  },
   setRoom: (roomId, playerId, username) => set({ roomId, playerId, username }),
   setPlayers: (players) => set({ players }),
   setPhase: (phase) => set({ phase }),
