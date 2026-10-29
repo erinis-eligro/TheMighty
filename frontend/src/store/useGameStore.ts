@@ -2,7 +2,14 @@ import { create } from 'zustand';
 import type { Socket } from 'socket.io-client';
 import { createGameSocket, emitWithAck } from '@/lib/socket';
 import { clearSession, loadSession, saveSession } from '@/lib/session';
-import type { CreateRoomAckData, GameErrorPayload, RoomAckData } from '@/types/protocol';
+import type {
+  CreateRoomAckData,
+  DeclareFriendRequest,
+  ExchangeKittyRequest,
+  GameErrorPayload,
+  PlaceBidRequest,
+  RoomAckData,
+} from '@/types/protocol';
 
 export type Card = {
   id: string;
@@ -143,9 +150,27 @@ interface GameState {
   rejoinRoom: (roomId?: string) => Promise<boolean>;
   /** Leaves (deletes) the single-player room and forgets the stored session. */
   leaveRoom: () => void;
+  /** Bidding/kitty/friend requests: the server validates and answers with a state_sync; resolves true on success. */
+  placeBid: (action: Pick<PlaceBidRequest, 'bid' | 'giruda' | 'pass'>) => Promise<boolean>;
+  exchangeKitty: (action: Pick<ExchangeKittyRequest, 'discardCardIds' | 'giruda' | 'bidScore'>) => Promise<boolean>;
+  declareFriend: (action: Pick<DeclareFriendRequest, 'type' | 'suit' | 'rank'>) => Promise<boolean>;
   setRoom: (roomId: string, playerId: string, username: string) => void;
   setError: (error: string | null) => void;
   reset: () => void;
+}
+
+/** Sends a user action for the current room; surfaces a refusal through `error`. */
+async function sendAction(
+  get: () => GameState,
+  set: (partial: Partial<GameState>) => void,
+  event: string,
+  action: object,
+): Promise<boolean> {
+  const { socket, roomId } = get();
+  if (!socket || !roomId) return false;
+  const res = await emitWithAck<RoomAckData>(socket, event, { roomId, ...action });
+  set({ error: res.ok ? null : res.error.message });
+  return res.ok;
 }
 
 export const useGameStore = create<GameState>((set, get) => ({
@@ -254,6 +279,9 @@ export const useGameStore = create<GameState>((set, get) => ({
     get().reset();
     set({ roomId: '', playerId: '' });
   },
+  placeBid: (action) => sendAction(get, set, 'place_bid', action),
+  exchangeKitty: (action) => sendAction(get, set, 'exchange_kitty', action),
+  declareFriend: (action) => sendAction(get, set, 'declare_friend', action),
   setRoom: (roomId, playerId, username) => set({ roomId, playerId, username }),
   setError: (error) => set({ error }),
   reset: () => set({

@@ -32,7 +32,14 @@ export function PlayerArea({ player, isCurrentTurn }: PlayerAreaProps) {
         <span className="text-xs font-bold">{player.handCount}</span>
       </div>
       <div className="text-xs text-[#6B7280]">{player.score}점</div>
-      {player.isFriend && <span className="text-[10px] text-[#8B5CF6] font-bold">프렌드</span>}
+      <div className="flex gap-1">
+        {player.isOwner && (
+          <span className="text-[10px] bg-pastel-warn text-pastel-warnText font-bold px-2 py-0.5 rounded-full">주공</span>
+        )}
+        {player.isFriend && (
+          <span className="text-[10px] bg-pastel-ok text-pastel-okText font-bold px-2 py-0.5 rounded-full">프렌드</span>
+        )}
+      </div>
     </motion.div>
   );
 }

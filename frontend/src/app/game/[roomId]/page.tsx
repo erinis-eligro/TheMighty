@@ -2,10 +2,27 @@
 
 import { useEffect } from 'react';
 import { useRouter } from 'next/navigation';
-import { useGameStore, type GamePhase, type Player as PlayerType } from '@/store/useGameStore';
+import { useGameStore, type FriendDeclaration, type GamePhase, type Player as PlayerType } from '@/store/useGameStore';
 import { PlayerArea } from '@/components/PlayerArea';
 import { TrickBoard } from '@/components/TrickBoard';
 import { UserHand } from '@/components/UserHand';
+import { BiddingPanel } from '@/components/BiddingPanel';
+import { KittyExchangeModal } from '@/components/KittyExchangeModal';
+import { FriendSelectionPanel } from '@/components/FriendSelectionPanel';
+import { SuitIcon, SUIT_SYMBOL } from '@/components/SuitIcon';
+
+const FRIEND_LABEL: Record<FriendDeclaration['type'], string> = {
+  NO_FRIEND: '노프렌드',
+  FIRST_TRICK: '초구 프렌드',
+  MIGHTY: '마이티 프렌드',
+  JOKER: '조커 프렌드',
+  CARD: '카드 프렌드',
+};
+
+function friendText(d: FriendDeclaration): string {
+  if (d.type !== 'CARD') return FRIEND_LABEL[d.type];
+  return `${SUIT_SYMBOL[d.suit]}${d.rank} 프렌드`;
+}
 
 const PHASE_LABEL: Record<GamePhase, string> = {
   READY: '대기',
@@ -25,10 +42,15 @@ export default function GamePage({ params }: { params: { roomId: string } }) {
   const roomId = useGameStore((s) => s.roomId);
   const players = useGameStore((s) => s.players);
   const phase = useGameStore((s) => s.phase);
-  const currentBid = useGameStore((s) => s.currentBid);
+  const highestBid = useGameStore((s) => s.highestBid);
   const giruda = useGameStore((s) => s.giruda);
+  const ownerPlayerId = useGameStore((s) => s.ownerPlayerId);
+  const friendPlayerId = useGameStore((s) => s.friendPlayerId);
+  const friendRevealed = useGameStore((s) => s.friendRevealed);
+  const friendDeclaration = useGameStore((s) => s.friendDeclaration);
   const turnPlayerId = useGameStore((s) => s.turnPlayerId);
   const result = useGameStore((s) => s.result);
+  const turnPlayer = useGameStore((s) => s.players[s.currentTurnIndex]);
   const isConnected = useGameStore((s) => s.isConnected);
   const error = useGameStore((s) => s.error);
   const setError = useGameStore((s) => s.setError);
@@ -59,6 +81,14 @@ export default function GamePage({ params }: { params: { roomId: string } }) {
     };
   }, [socket, isConnected, params.roomId, rejoinRoom, router]);
 
+  const owner = players.find((p) => p.id === ownerPlayerId);
+  const friend = players.find((p) => p.id === friendPlayerId);
+  // The giruda is final (shown in the header) once bidding is over; before that only the leading bid is known.
+  const bidFixed = ownerPlayerId !== '';
+  const shownGiruda = bidFixed ? giruda : (highestBid?.giruda ?? null);
+  const aiThinking =
+    turnPlayer?.isAi && (phase === 'KITTY_EXCHANGE' || phase === 'FRIEND_SELECTION' || phase === 'TRICK_PLAYING');
+
   if (!isConnected) {
     return <div className="min-h-screen flex items-center justify-center">연결 중...</div>;
   }
@@ -75,13 +105,30 @@ export default function GamePage({ params }: { params: { roomId: string } }) {
         </div>
         <div className="flex items-center gap-4 text-sm">
           <div className="bg-white px-3 py-1.5 rounded-lg shadow-sm border border-[#E5E7EB]">
-            <span className="text-[#6B7280] text-xs block">비딩 점수</span>
-            <span className="font-bold text-[#1F2937]">{currentBid}점</span>
+            <span className="text-[#6B7280] text-xs block">{bidFixed ? '비딩 점수' : '최고 비딩'}</span>
+            <span className="font-bold text-[#1F2937]">{highestBid ? `${highestBid.score}점` : '-'}</span>
           </div>
           <div className="bg-white px-3 py-1.5 rounded-lg shadow-sm border border-[#E5E7EB]">
             <span className="text-[#6B7280] text-xs block">기루다</span>
-            <span className="font-bold text-[#1F2937]">{giruda}</span>
+            <span className="font-bold text-[#1F2937] text-lg leading-tight">
+              {shownGiruda ? <SuitIcon giruda={shownGiruda} /> : '-'}
+            </span>
           </div>
+          {owner && (
+            <div className="bg-white px-3 py-1.5 rounded-lg shadow-sm border border-[#E5E7EB]">
+              <span className="text-[#6B7280] text-xs block">주공</span>
+              <span className="font-bold text-[#1F2937]">{owner.username}</span>
+            </div>
+          )}
+          {friendDeclaration && (
+            <div className="bg-white px-3 py-1.5 rounded-lg shadow-sm border border-[#E5E7EB]">
+              <span className="text-[#6B7280] text-xs block">프렌드</span>
+              <span className="font-bold text-[#1F2937]">
+                {friend ? friend.username : friendRevealed ? '없음' : '비공개'}
+                <span className="ml-1 text-xs font-normal text-[#6B7280]">({friendText(friendDeclaration)})</span>
+              </span>
+            </div>
+          )}
           <span className={`px-3 py-1 rounded-full text-xs font-bold ${phase === 'BIDDING' ? 'bg-[#FEF3C7] text-[#92400E]' : phase === 'TRICK_PLAYING' ? 'bg-[#D1FAE5] text-[#047857]' : 'bg-[#E5E7EB] text-[#6B7280]'}`}>
             {PHASE_LABEL[phase]}
           </span>
@@ -103,7 +150,20 @@ export default function GamePage({ params }: { params: { roomId: string } }) {
           <PlayerArea key={p.id} player={p} isCurrentTurn={p.id === turnPlayerId} />
         ))}
         <TrickBoard />
+        {phase === 'BIDDING' && (
+          <div className="absolute inset-0 z-30 flex items-center justify-center pointer-events-none">
+            <BiddingPanel />
+          </div>
+        )}
+        {aiThinking && (
+          <div className="absolute top-2 left-1/2 -translate-x-1/2 z-20 bg-white/90 px-4 py-1.5 rounded-full shadow border border-[#E5E7EB] text-sm text-[#6B7280] animate-pulse whitespace-nowrap">
+            {turnPlayer?.username} 님이 진행 중...
+          </div>
+        )}
       </div>
+
+      <KittyExchangeModal />
+      <FriendSelectionPanel />
 
       <UserHand />
 
