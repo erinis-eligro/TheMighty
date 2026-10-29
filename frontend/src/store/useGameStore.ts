@@ -98,6 +98,8 @@ interface GameState {
   currentBid: number;
   highestBid: Bid | null;
   bidLeader?: string;
+  /** Card ids the server says the viewer may play now (empty unless it is his turn). */
+  playableCardIds: string[];
   isConnected: boolean;
   error: string | null;
 
@@ -141,6 +143,7 @@ export const useGameStore = create<GameState>((set) => ({
   passCount: 0,
   currentBid: 0,
   highestBid: null,
+  playableCardIds: [],
   isConnected: false,
   error: null,
 
@@ -171,6 +174,6 @@ export const useGameStore = create<GameState>((set) => ({
     phase: 'READY', players: [], currentTrick: null, trickHistory: [], currentTrickNumber: 0,
     currentTurnIndex: 0, turnPlayerId: '', leadSuit: null, isJokerCallActive: false, kitty: [],
     presidentIndex: null, friendDeclaration: null, friendIndex: null, friendPlayerId: undefined, friendRevealed: false,
-    passCount: 0, currentBid: 0, highestBid: null, bidLeader: undefined, error: null,
+    passCount: 0, currentBid: 0, highestBid: null, bidLeader: undefined, playableCardIds: [], error: null,
   }),
 }));

@@ -105,3 +105,143 @@ describe('Auto Turn Driver', () => {
     assert.equal((gateway as any).rooms.has(roomId), false);
   });
 });
+
+describe('Information hiding and identity', () => {
+  /** A client whose emits are recorded, so direct (non-broadcast) payloads can be inspected too. */
+  function makeClient(id: string) {
+    return { id, join: jest.fn(), leave: jest.fn(), emit: jest.fn() } as unknown as Socket & { emit: jest.Mock };
+  }
+
+  function startHumanGame() {
+    const ctx = setup();
+    const client = makeClient('sock-1');
+    const { roomId, playerId } = (ctx.gateway.handleCreateRoom(client, { username: 'human' }) as {
+      data: { roomId: string; playerId: string };
+    }).data;
+    const managed = (ctx.gateway as any).rooms.get(roomId);
+    return { ...ctx, client, roomId, playerId, managed };
+  }
+
+  const handsOf = (players: any[]) => players.filter((p) => p.hand.some((c: any) => !c.hidden));
+
+  beforeEach(() => jest.useFakeTimers());
+  afterEach(() => jest.useRealTimers());
+
+  test('room_created, game_started and state_sync only expose the receiver\'s own hand', () => {
+    const { gateway, client, roomId, playerId, emitted, managed } = startHumanGame();
+    const created = client.emit.mock.calls.find((c) => c[0] === GAME_EVENTS.ROOM_CREATED)![1];
+    assert.equal(handsOf(created.players).length, 0);
+    assert.ok(created.players.every((p: any) => !('socketId' in p)));
+
+    gateway.handleStartGame(client, { roomId });
+    const started = emitted.find((e) => e.event === GAME_EVENTS.GAME_STARTED)!;
+    const startedPlayers = (started.payload as any).players;
+    assert.deepEqual(handsOf(startedPlayers).map((p: any) => p.id), [playerId]);
+    assert.equal(startedPlayers.find((p: any) => p.id === playerId).hand.length, 10);
+    // No game_started payload goes to the room as a whole.
+    assert.ok(emitted.filter((e) => e.event === GAME_EVENTS.GAME_STARTED).every((e) => e.room === 'sock-1'));
+    // Every state_sync is masked the same way.
+    for (const e of emitted.filter((x) => x.event === GAME_EVENTS.STATE_SYNC)) {
+      assert.ok(handsOf((e.payload as any).players).every((p: any) => p.id === playerId));
+    }
+    assert.equal(managed.engine.state.players.length, 5);
+  });
+
+  test('room_joined is masked for the joining player', () => {
+    const { gateway, roomId, playerId } = startHumanGame();
+    const client2 = makeClient('sock-2');
+    gateway.handleJoinRoom(client2, { roomId, username: 'human' });
+    const joined = client2.emit.mock.calls.find((c) => c[0] === GAME_EVENTS.ROOM_JOINED)![1];
+    assert.equal(joined.playerId, playerId);
+    assert.ok(joined.players.every((p: any) => !('socketId' in p)));
+    assert.ok(handsOf(joined.players).every((p: any) => p.id === playerId));
+  });
+
+  test('the kitty is hidden from everybody but the president', () => {
+    const { gateway, client, roomId, playerId, managed } = startHumanGame();
+    gateway.handleStartGame(client, { roomId });
+    const pub = (id: string) => (gateway as any).publicState(managed, id);
+    assert.equal(pub(playerId).kitty.length, 0);
+    managed.engine.state.phase = 'KITTY_EXCHANGE';
+    managed.engine.state.ownerPlayerId = playerId;
+    assert.equal(pub(playerId).kitty.length, 3);
+    assert.equal(pub('ai-0').kitty.length, 0);
+    assert.equal(pub('').kitty.length, 0);
+  });
+
+  test('an unrevealed friend is not exposed', () => {
+    const { gateway, client, roomId, playerId, managed } = startHumanGame();
+    gateway.handleStartGame(client, { roomId });
+    const state = managed.engine.state;
+    state.players[2].isFriend = true;
+    state.friendIndex = 2;
+    state.friendPlayerId = state.players[2].id;
+    state.friendRevealed = false;
+    const hidden = (gateway as any).publicState(managed, playerId);
+    assert.equal(hidden.friendIndex, null);
+    assert.equal(hidden.friendPlayerId, undefined);
+    assert.ok(hidden.players.every((p: any) => !p.isFriend));
+
+    state.friendRevealed = true;
+    const shown = (gateway as any).publicState(managed, playerId);
+    assert.equal(shown.friendPlayerId, state.players[2].id);
+    assert.equal(shown.players[2].isFriend, true);
+  });
+
+  test('get_state masks for the player bound to the socket, not the socket id', () => {
+    const { gateway, client, roomId, playerId } = startHumanGame();
+    gateway.handleStartGame(client, { roomId });
+    client.emit.mockClear();
+    gateway.handleGetState(client, { roomId });
+    const payload = client.emit.mock.calls.find((c) => c[0] === GAME_EVENTS.STATE_SYNC)![1];
+    assert.deepEqual(handsOf(payload.players).map((p: any) => p.id), [playerId]);
+
+    const stranger = makeClient('sock-x');
+    gateway.handleGetState(stranger, { roomId });
+    const strangerPayload = stranger.emit.mock.calls.find((c) => c[0] === GAME_EVENTS.STATE_SYNC)![1];
+    assert.equal(handsOf(strangerPayload.players).length, 0);
+  });
+
+  test('a socket cannot act as another player, and playerId may be omitted', () => {
+    const { gateway, client, roomId, playerId, managed } = startHumanGame();
+    gateway.handleStartGame(client, { roomId });
+    const stranger = makeClient('sock-x');
+    assert.throws(() => gateway.handlePlaceBid(stranger, { roomId, playerId, pass: true }), /not bound/);
+    assert.throws(() => gateway.handlePlaceBid(client, { roomId, playerId: 'ai-0', pass: true }), /not bound/);
+    assert.throws(
+      () => gateway.handlePlayCard(stranger, { roomId, playerId, cardId: managed.engine.state.players[0].hand[0].id }),
+      /not bound/
+    );
+    assert.equal(managed.engine.state.players[0].hasPassed, false);
+
+    const res = gateway.handlePlaceBid(client, { roomId, pass: true });
+    assert.equal(res.ok, true);
+    assert.equal(managed.engine.state.players[0].hasPassed, true);
+  });
+
+  test('leave_room only works for the player bound to the socket', () => {
+    const { gateway, roomId, playerId } = startHumanGame();
+    gateway.handleLeaveRoom(makeClient('sock-x'), { roomId, playerId });
+    assert.equal((gateway as any).rooms.has(roomId), true);
+  });
+
+  test('state_sync carries the server computed playableCardIds only on the viewer\'s turn', () => {
+    const { gateway, managed, playerId } = startHumanGame();
+    const engine = managed.engine;
+    engine.deal();
+    assert.deepEqual((gateway as any).publicState(managed, playerId).playableCardIds, []);
+
+    // Fast-forward to the first trick: the human (seat 0) is president and leads.
+    engine.state.phase = 'TRICK_PLAYING';
+    engine.state.giruda = 'SPADE';
+    engine.state.presidentIndex = 0;
+    engine.state.currentTrickNumber = 1;
+    (engine as any)._trickNumber = 1;
+    engine.state.currentTurnIndex = 0;
+    const hand = engine.state.players[0].hand;
+    const ids = (gateway as any).publicState(managed, playerId).playableCardIds as string[];
+    assert.ok(ids.length > 0);
+    assert.ok(ids.every((id) => hand.some((c: any) => c.id === id)));
+    assert.deepEqual((gateway as any).publicState(managed, 'ai-0').playableCardIds, []);
+  });
+});

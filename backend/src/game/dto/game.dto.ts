@@ -21,9 +21,11 @@ export class PlaceBidDto {
   @IsUUID()
   roomId!: string;
 
+  /** Ignored for identity: the server uses the player bound to the socket. If sent, it must match. */
   @IsString()
   @IsUUID()
-  playerId!: string;
+  @IsOptional()
+  playerId?: string;
 
   @IsNumber()
   @IsOptional()
@@ -44,9 +46,11 @@ export class ExchangeKittyDto {
   @IsUUID()
   roomId!: string;
 
+  /** Ignored for identity: the server uses the player bound to the socket. If sent, it must match. */
   @IsString()
   @IsUUID()
-  playerId!: string;
+  @IsOptional()
+  playerId?: string;
 
   /** Exactly 3 distinct card ids from the president's 13 cards (hand + kitty). */
   @IsArray()
@@ -69,9 +73,11 @@ export class DeclareFriendDto {
   @IsUUID()
   roomId!: string;
 
+  /** Ignored for identity: the server uses the player bound to the socket. If sent, it must match. */
   @IsString()
   @IsUUID()
-  playerId!: string;
+  @IsOptional()
+  playerId?: string;
 
   /** NO_FRIEND | FIRST_TRICK | MIGHTY | JOKER | CARD */
   @IsString()
@@ -94,9 +100,11 @@ export class PlayCardDto {
   @IsUUID()
   roomId!: string;
 
+  /** Ignored for identity: the server uses the player bound to the socket. If sent, it must match. */
   @IsString()
   @IsUUID()
-  playerId!: string;
+  @IsOptional()
+  playerId?: string;
 
   @IsString()
   cardId!: string;

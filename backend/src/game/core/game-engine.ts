@@ -614,6 +614,39 @@ export class GameEngine {
   }
 
   /**
+   * Ids of the cards the player may legally play right now (same rules as `playCard`).
+   * Empty unless it is that player's turn in TRICK_PLAYING. Meant for UI highlighting only;
+   * `playCard` still validates every play.
+   */
+  getPlayableCardIds(playerId: string): string[] {
+    if (this.state.phase !== 'TRICK_PLAYING') return [];
+    const playerIndex = this.indexOfPlayer(playerId);
+    if (playerIndex < 0 || playerIndex !== this.state.currentTurnIndex) return [];
+
+    const hand = this.state.players[playerIndex].hand;
+    const isLeading = !this.state.currentTrick;
+    const leadSuit = this.state.currentTrick?.leadSuit;
+    return hand
+      .filter(
+        (card) =>
+          validatePlay({
+            card,
+            hand,
+            leadSuit,
+            isLeading,
+            trickNumber: this._trickNumber,
+            totalTricks: TOTAL_TRICKS,
+            giruda: this.state.giruda as string,
+            restrictGirudaLead: this.restrictsGirudaLead(),
+            isJokerCallActive: this.state.isJokerCallActive,
+            // A leading joker needs a named suit; the player picks it when playing, so any suit will do here.
+            jokerLeadSuit: isLeading ? 'SPADE' : undefined,
+          }).valid
+      )
+      .map((card) => card.id);
+  }
+
+  /**
    * True when the current turn player is the president leading the first trick
    * with a giruda declared: the president may not lead the giruda then.
    */
