@@ -33,6 +33,7 @@ export const GAME_EVENTS = {
   CARD_PLAYED: 'card_played',
   TURN_BEGIN: 'turn_begin',
   TURN_COMPLETE: 'turn_complete',
+  TRICK_RESOLVED: 'trick_resolved',
 
   // Game end
   GAME_END: 'game_end',
@@ -49,3 +50,6 @@ export const SEAT_POSITIONS = ['bottom', 'top', 'left', 'right', 'center'] as co
 export type SeatPosition = (typeof SEAT_POSITIONS)[number];
 
 export const DEFAULT_BID_MIN = 13;
+
+/** How long a completed trick stays on the board (TRICK_RESOLVED) before the next trick starts. */
+export const TRICK_RESOLVED_DELAY_MS = 1500;

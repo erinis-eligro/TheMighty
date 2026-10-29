@@ -43,6 +43,7 @@ export class GameEngine {
   private _trickNumber = 0;
   private teamPoints = 0;
   private bidScore = 0;
+  private _resolvedWinnerIndex = 0;
   /**
    * Seat index of the player the friend condition points at. Server-side only:
    * it is never sent to clients; `state.friendIndex` is set once it is revealed.
@@ -509,6 +510,7 @@ export class GameEngine {
       trickNumber: this._trickNumber,
       totalTricks: TOTAL_TRICKS,
       giruda: this.state.giruda as string,
+      restrictGirudaLead: this.restrictsGirudaLead(),
       isJokerCallActive: this.state.isJokerCallActive,
       declaresJokerCall: options.jokerCall === true,
       jokerLeadSuit: options.jokerLeadSuit,
@@ -558,7 +560,27 @@ export class GameEngine {
     return { valid: true, trickComplete: false, friendRevealed };
   }
 
-  /** TRICK_PLAYING -> TRICK_RESOLVED -> (TRICK_PLAYING | ROUND_SCORING -> GAME_OVER). */
+  /**
+   * True when the current turn player is the president leading the first trick
+   * with a giruda declared: the president may not lead the giruda then.
+   */
+  restrictsGirudaLead(): boolean {
+    const s = this.state;
+    return (
+      s.phase === 'TRICK_PLAYING' &&
+      this._trickNumber === 1 &&
+      s.currentTrick === null &&
+      s.currentTurnIndex === s.presidentIndex &&
+      s.giruda !== 'NO_GIRUDA'
+    );
+  }
+
+  /**
+   * TRICK_PLAYING -> TRICK_RESOLVED. Decides the winner, collects the score
+   * cards and records the trick. The completed trick stays in
+   * `state.currentTrick` so clients can see all 5 cards; the game moves on
+   * with `advanceAfterTrick()` once the resolve delay has passed.
+   */
   private resolveTrick(): {
     valid: boolean;
     trickComplete: true;
@@ -585,6 +607,7 @@ export class GameEngine {
     trick.winnerPlayerId = result.winnerPlayerId;
     trick.winnerIndex = winnerIndex;
     this.state.trickHistory.push(trick);
+    this._resolvedWinnerIndex = winnerIndex;
 
     const winner = this.state.players[winnerIndex];
     if (winner) {
@@ -612,6 +635,25 @@ export class GameEngine {
       this.teamPoints += result.points;
     }
 
+    return {
+      valid: true,
+      trickComplete: true,
+      trick,
+      points: result.points,
+      friendRevealed,
+    };
+  }
+
+  /**
+   * TRICK_RESOLVED -> TRICK_PLAYING (the trick winner leads the next trick), or
+   * TRICK_RESOLVED -> ROUND_SCORING -> GAME_OVER after the last trick.
+   * Called by the server timer after the resolve delay.
+   */
+  advanceAfterTrick(): { gameOver: boolean } {
+    if (this.state.phase !== 'TRICK_RESOLVED') {
+      throw new Error('Not in trick resolved phase');
+    }
+
     this.state.currentTrick = null;
     this.state.leadSuit = null;
     this.state.isJokerCallActive = false;
@@ -620,19 +662,13 @@ export class GameEngine {
     if (this._trickNumber > TOTAL_TRICKS) {
       this.transition('ROUND_SCORING');
       this.transition('GAME_OVER');
-    } else {
-      this.state.currentTrickNumber = this._trickNumber;
-      this.transition('TRICK_PLAYING');
-      this.setTurn(winnerIndex);
+      return { gameOver: true };
     }
 
-    return {
-      valid: true,
-      trickComplete: true,
-      trick,
-      points: result.points,
-      friendRevealed,
-    };
+    this.state.currentTrickNumber = this._trickNumber;
+    this.transition('TRICK_PLAYING');
+    this.setTurn(this._resolvedWinnerIndex);
+    return { gameOver: false };
   }
 
   getResult(): { isWin: boolean; teamPoints: number; bidScore: number } {

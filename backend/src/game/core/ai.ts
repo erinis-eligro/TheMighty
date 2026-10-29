@@ -160,6 +160,7 @@ export function selectCardToPlay({
   isPartnerWinningCurrentTrick,
   mightyCard,
   jokerCallCard,
+  restrictGirudaLead,
   isJokerCallActive = false,
 }: {
   hand: Card[];
@@ -173,6 +174,7 @@ export function selectCardToPlay({
   mightyCard: { suit: string; rank: string };
   /** Only needed to decide whether to declare the joker call when leading. */
   jokerCallCard?: { suit: string; rank: string };
+  restrictGirudaLead?: boolean;
   /** The joker call was already declared in the current trick. */
   isJokerCallActive?: boolean;
 }): AiPlayDecision {
@@ -188,6 +190,7 @@ export function selectCardToPlay({
       trickNumber,
       totalTricks,
       giruda,
+      restrictGirudaLead,
       isJokerCallActive,
       jokerLeadSuit: isLeading && isJokerCard(c) ? pickJokerLeadSuit(hand) : undefined,
     });

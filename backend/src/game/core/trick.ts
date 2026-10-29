@@ -43,6 +43,7 @@ export function validatePlay({
   trickNumber,
   totalTricks,
   giruda,
+  restrictGirudaLead,
   isJokerCallActive = false,
   declaresJokerCall = false,
   jokerLeadSuit,
@@ -54,6 +55,8 @@ export function validatePlay({
   trickNumber: number;
   totalTricks: number;
   giruda: string;
+  /** First trick, president leading: the giruda may not be led (unless it is all they can play). */
+  restrictGirudaLead?: boolean;
   isJokerCallActive?: boolean;
   declaresJokerCall?: boolean;
   jokerLeadSuit?: string;
@@ -64,6 +67,17 @@ export function validatePlay({
   }
 
   if (isLeading) {
+    if (
+      restrictGirudaLead &&
+      giruda !== 'NO_GIRUDA' &&
+      card.suit === giruda &&
+      !isJokerCard(card)
+    ) {
+      const hasOther = hand.some((c) => c.suit !== giruda && !isJokerCard(c));
+      if (hasOther) {
+        return { valid: false, reason: 'cannot_lead_giruda_on_first_trick' };
+      }
+    }
     if (declaresJokerCall && !isJokerCallCard(card, giruda)) {
       return { valid: false, reason: 'joker_call_requires_joker_call_card' };
     }
