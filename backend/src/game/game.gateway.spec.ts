@@ -360,3 +360,35 @@ describe('User stats', () => {
     assert.deepEqual(stats, { username: 'nobody', totalGames: 0, wins: 0, losses: 0, winRate: 0 });
   });
 });
+
+describe('Recent games', () => {
+  const rows = [
+    { id: 'g1', role: 'OWNER', is_win: true, bid_score: 14, team_points: 15, giruda: 'SPADE', created_at: new Date(0) },
+  ];
+  const make = () => {
+    const findMany = jest.fn().mockResolvedValue(rows);
+    const service = new GameService({ gameHistory: { findMany } } as unknown as PrismaService);
+    return { service, findMany };
+  };
+
+  test('maps rows newest first and scopes the query to the nickname', async () => {
+    const { service, findMany } = make();
+    const games = await service.getRecentGames('human', 5);
+    assert.deepEqual(games, [
+      { id: 'g1', role: 'OWNER', isWin: true, bidScore: 14, teamPoints: 15, giruda: 'SPADE', createdAt: new Date(0) },
+    ]);
+    assert.deepEqual(findMany.mock.calls[0][0], {
+      where: { user: { username: 'human' } },
+      orderBy: { created_at: 'desc' },
+      take: 5,
+    });
+  });
+
+  test('clamps the limit', async () => {
+    const { service, findMany } = make();
+    await service.getRecentGames('human', 9999);
+    await service.getRecentGames('human', -3);
+    assert.equal(findMany.mock.calls[0][0].take, 50);
+    assert.equal(findMany.mock.calls[1][0].take, 1);
+  });
+});

@@ -9,6 +9,7 @@ import { UserHand } from '@/components/UserHand';
 import { BiddingPanel } from '@/components/BiddingPanel';
 import { KittyExchangeModal } from '@/components/KittyExchangeModal';
 import { FriendSelectionPanel } from '@/components/FriendSelectionPanel';
+import { ResultModal } from '@/components/ResultModal';
 import { SuitIcon, SUIT_SYMBOL } from '@/components/SuitIcon';
 
 const FRIEND_LABEL: Record<FriendDeclaration['type'], string> = {
@@ -49,13 +50,11 @@ export default function GamePage({ params }: { params: { roomId: string } }) {
   const friendRevealed = useGameStore((s) => s.friendRevealed);
   const friendDeclaration = useGameStore((s) => s.friendDeclaration);
   const turnPlayerId = useGameStore((s) => s.turnPlayerId);
-  const result = useGameStore((s) => s.result);
   const turnPlayer = useGameStore((s) => s.players[s.currentTurnIndex]);
   const isConnected = useGameStore((s) => s.isConnected);
   const error = useGameStore((s) => s.error);
   const setError = useGameStore((s) => s.setError);
   const rejoinRoom = useGameStore((s) => s.rejoinRoom);
-  const leaveRoom = useGameStore((s) => s.leaveRoom);
 
   // Server errors (game_error / failed acks) are shown as a toast that disappears by itself.
   useEffect(() => {
@@ -188,29 +187,7 @@ export default function GamePage({ params }: { params: { roomId: string } }) {
         <UserHand />
       </div>
 
-      {phase === 'GAME_OVER' && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm">
-          <div className="bg-white rounded-2xl p-8 max-w-md text-center shadow-2xl">
-            <h2 className="text-2xl font-bold text-pastel-text mb-2">게임 종료</h2>
-            {result ? (
-              <p className="text-pastel-muted mb-6">
-                {result.isWin ? '주공팀 승리' : '야당팀 승리'} (주공팀 {result.teamPoints} / 야당 {result.opponentPoints} / 비딩 {result.bidScore})
-              </p>
-            ) : (
-              <p className="text-pastel-muted mb-6">결과를 확인하세요.</p>
-            )}
-            <button
-              onClick={() => {
-                leaveRoom();
-                router.push('/lobby');
-              }}
-              className="w-full py-3 bg-pastel-accentHover text-white rounded-xl font-semibold hover:bg-pastel-accentDeep transition-colors"
-            >
-              로비로 돌아가기
-            </button>
-          </div>
-        </div>
-      )}
+      {phase === 'GAME_OVER' && <ResultModal />}
     </div>
   );
 }
