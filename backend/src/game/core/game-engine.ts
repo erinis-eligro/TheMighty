@@ -1,10 +1,10 @@
-import { Card, Player, GameState, GamePhase, Trick, FriendDeclaration, BidGiruda, Suit } from '../entities/game.entity';
+import { Card, Player, GameState, GamePhase, Trick, FriendDeclaration, BidGiruda, RoundResult, Suit } from '../entities/game.entity';
 import { SeatPosition } from '../constants';
 import { createDeck, shuffleDeck, validateDeck } from './deck';
 import { dealCards } from './deal';
 import { validatePlay, determineTrickWinner } from './trick';
 import { validateBid, bidRank, BID_GIRUDAS } from './bidding';
-import { calculateTrickPoints, evaluateGameResult } from './score';
+import { scoreRound } from './score';
 import {
   getMightyCard,
   getJokerCallCard,
@@ -41,7 +41,6 @@ export class GameEngine {
   private _mightyCard: { suit: string; rank: string };
   private _jokerCallCard: { suit: string; rank: string };
   private _trickNumber = 0;
-  private teamPoints = 0;
   private bidScore = 0;
   private _resolvedWinnerIndex = 0;
   /**
@@ -627,14 +626,6 @@ export class GameEngine {
       }
     }
 
-    // Team membership uses the server-side friend, which may not be revealed yet.
-    // Without a friend (NO_FRIEND etc.) only the president's own tricks count.
-    const isOwnerTeam = winnerIndex === this.state.presidentIndex || winnerIndex === this.friendHolderIndex;
-
-    if (isOwnerTeam) {
-      this.teamPoints += result.points;
-    }
-
     return {
       valid: true,
       trickComplete: true,
@@ -661,6 +652,7 @@ export class GameEngine {
 
     if (this._trickNumber > TOTAL_TRICKS) {
       this.transition('ROUND_SCORING');
+      this.scoreRound();
       this.transition('GAME_OVER');
       return { gameOver: true };
     }
@@ -671,13 +663,25 @@ export class GameEngine {
     return { gameOver: false };
   }
 
-  getResult(): { isWin: boolean; teamPoints: number; bidScore: number } {
-    if (this.state.phase !== 'GAME_OVER') {
+  /** ROUND_SCORING: totals the owner team / opposition score cards and decides the winner. */
+  private scoreRound(): void {
+    if (this.state.phase !== 'ROUND_SCORING') {
+      throw new Error('Not in round scoring phase');
+    }
+    this.state.result = scoreRound({
+      players: this.state.players,
+      ownerPlayerId: this.state.ownerPlayerId,
+      friendPlayerId: this.state.friendPlayerId,
+      bidScore: this.bidScore,
+      giruda: this.state.giruda,
+    });
+  }
+
+  getResult(): RoundResult {
+    if (this.state.phase !== 'GAME_OVER' || !this.state.result) {
       throw new Error('Game has not ended');
     }
-
-    const isWin = evaluateGameResult(this.teamPoints, this.bidScore);
-    return { isWin, teamPoints: this.teamPoints, bidScore: this.bidScore };
+    return this.state.result;
   }
 }
 

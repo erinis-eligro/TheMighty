@@ -117,17 +117,34 @@ export class GameService {
     }));
   }
 
-  async saveGameHistory(userId: string, role: Role, isWin: boolean, bidScore: number, giruda: Giruda, teamPoints = 0) {
-    await this.prisma.gameHistory.create({
-      data: { user_id: userId, role, is_win: isWin, bid_score: bidScore, team_points: teamPoints, giruda },
-    });
-    await this.prisma.user.update({
-      where: { id: userId },
-      data: {
-        total_games: { increment: 1 },
-        ...(isWin ? { win_count: { increment: 1 } } : {}),
-        ...(!isWin ? { lose_count: { increment: 1 } } : {}),
-      },
+  /**
+   * Persists one finished game for a user: upserts the user, appends the
+   * GameHistory row and updates the win/lose counters in a single transaction.
+   */
+  async saveGameHistory(
+    username: string,
+    role: Role,
+    isWin: boolean,
+    bidScore: number,
+    giruda: Giruda,
+    teamPoints = 0
+  ): Promise<void> {
+    await this.prisma.$transaction(async (tx) => {
+      const user = await tx.user.upsert({
+        where: { username },
+        update: {},
+        create: { username },
+      });
+      await tx.gameHistory.create({
+        data: { user_id: user.id, role, is_win: isWin, bid_score: bidScore, team_points: teamPoints, giruda },
+      });
+      await tx.user.update({
+        where: { id: user.id },
+        data: {
+          total_games: { increment: 1 },
+          ...(isWin ? { win_count: { increment: 1 } } : { lose_count: { increment: 1 } }),
+        },
+      });
     });
   }
 }
