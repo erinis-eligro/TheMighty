@@ -20,3 +20,40 @@ backend-test:
   rules:
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
     - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+
+# 브라우저 E2E (Playwright). 느리므로 MR 마다 돌리지 않고 수동 실행/스케줄(야간)로만 돌린다.
+frontend-e2e:
+  stage: test
+  image: mcr.microsoft.com/playwright:v1.64.1-noble
+  tags:
+    - docker
+  services:
+    - name: postgres:15-alpine
+      alias: postgres
+  variables:
+    POSTGRES_USER: postgres
+    POSTGRES_PASSWORD: postgres
+    POSTGRES_DB: mighty
+    DATABASE_URL: "postgresql://postgres:postgres@postgres:5432/mighty?schema=public"
+    NEXT_PUBLIC_BACKEND_URL: "http://localhost:3001"
+  script:
+    - cd backend
+    - npm ci
+    - npx prisma generate
+    - npx prisma migrate deploy
+    - npm run build
+    - cd ../frontend
+    - npm ci
+    - npm run build
+    - npx playwright test
+  artifacts:
+    when: on_failure
+    expire_in: 1 week
+    paths:
+      - frontend/playwright-report/
+      - frontend/test-results/
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "schedule"
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+      when: manual
+      allow_failure: true
