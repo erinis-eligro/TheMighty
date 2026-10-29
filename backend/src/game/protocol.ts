@@ -64,6 +64,17 @@ export interface PlaceBidRequest {
   pass?: boolean;
 }
 
+export interface ExchangeKittyRequest {
+  roomId: string;
+  playerId: string;
+  /** Exactly 3 distinct card ids from the president's 13 cards (hand + kitty). */
+  discardCardIds: string[];
+  /** Final giruda; omit to keep the bid giruda. */
+  giruda?: string;
+  /** Raised bid score; required only when the giruda is changed. */
+  bidScore?: number;
+}
+
 export interface DeclareFriendRequest {
   roomId: string;
   playerId: string;
@@ -90,6 +101,7 @@ export interface ClientToServerEvents {
   get_state: (payload: GetStateRequest, ack?: AckFn<RoomIdAckData>) => void;
   start_game: (payload: StartGameRequest, ack?: AckFn<RoomIdAckData>) => void;
   place_bid: (payload: PlaceBidRequest, ack?: AckFn<RoomAckData>) => void;
+  exchange_kitty: (payload: ExchangeKittyRequest, ack?: AckFn<RoomAckData>) => void;
   declare_friend: (payload: DeclareFriendRequest, ack?: AckFn<RoomAckData>) => void;
   play_card: (payload: PlayCardRequest, ack?: AckFn<RoomAckData>) => void;
 }

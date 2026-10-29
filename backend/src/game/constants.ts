@@ -24,6 +24,10 @@ export const GAME_EVENTS = {
   FRIEND_DECLARED: 'friend_declared',
   FRIEND_REVEALED: 'friend_revealed',
 
+  // Kitty exchange
+  EXCHANGE_KITTY: 'exchange_kitty',
+  KITTY_EXCHANGED: 'kitty_exchanged',
+
   // Turn play
   PLAY_CARD: 'play_card',
   CARD_PLAYED: 'card_played',
