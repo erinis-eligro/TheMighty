@@ -4,7 +4,9 @@ import { useEffect, useState, type FormEvent } from 'react';
 import { useRouter } from 'next/navigation';
 import { motion } from 'framer-motion';
 import { useGameStore } from '@/store/useGameStore';
-import { fetchUserStats, type UserStats } from '@/lib/api';
+import { fetchRecentGames, fetchUserStats, type GameHistoryEntry, type UserStats } from '@/lib/api';
+import { SuitIcon } from './SuitIcon';
+import { ROLE_LABEL } from './ResultModal';
 import { loadSession } from '@/lib/session';
 
 const NICKNAME_KEY = 'mighty.nickname';
@@ -22,6 +24,7 @@ export function Lobby() {
   const [nickname, setNickname] = useState('');
   const [busy, setBusy] = useState(false);
   const [stats, setStats] = useState<UserStats | null>(null);
+  const [recent, setRecent] = useState<GameHistoryEntry[]>([]);
   // Read after mount: the stored session is not available during server rendering.
   const [savedRoomId, setSavedRoomId] = useState<string | null>(null);
 
@@ -37,12 +40,16 @@ export function Lobby() {
   useEffect(() => {
     if (!name) {
       setStats(null);
+      setRecent([]);
       return;
     }
     const controller = new AbortController();
     const timer = setTimeout(() => {
       fetchUserStats(name, controller.signal).then((s) => {
         if (!controller.signal.aborted) setStats(s);
+      });
+      fetchRecentGames(name, 5, controller.signal).then((games) => {
+        if (!controller.signal.aborted) setRecent(games);
       });
     }, 400);
     return () => {
@@ -145,6 +152,19 @@ export function Lobby() {
               </p>
             ) : (
               <p className="text-sm text-pastel-muted">전적을 불러올 수 없습니다.</p>
+            )}
+            {recent.length > 0 && (
+              <ul className="mt-3 space-y-1" aria-label="최근 게임">
+                {recent.map((g) => (
+                  <li key={g.id} className="flex items-center justify-between text-xs rounded-lg bg-pastel-bg px-3 py-1.5">
+                    <span className={`font-bold ${g.isWin ? 'text-emerald-600' : 'text-rose-500'}`}>{g.isWin ? '승' : '패'}</span>
+                    <span className="text-pastel-text">{ROLE_LABEL[g.role]}</span>
+                    <span className="text-pastel-muted">
+                      <SuitIcon giruda={g.giruda} /> {g.bidScore}점 비딩 / {g.teamPoints}점 획득
+                    </span>
+                  </li>
+                ))}
+              </ul>
             )}
           </div>
         )}

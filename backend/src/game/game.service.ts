@@ -15,6 +15,20 @@ export interface UserStats {
   winRate: number;
 }
 
+export interface GameHistoryEntry {
+  id: string;
+  role: Role;
+  isWin: boolean;
+  bidScore: number;
+  /** Score cards the owner team collected. */
+  teamPoints: number;
+  giruda: Giruda;
+  createdAt: Date;
+}
+
+export const DEFAULT_HISTORY_LIMIT = 10;
+export const MAX_HISTORY_LIMIT = 50;
+
 /**
  * Owns every game session (the single store of rooms). The gateway is only the transport:
  * it looks sessions up here, and the socket/timer bookkeeping lives on the session.
@@ -161,6 +175,25 @@ export class GameService implements OnModuleDestroy {
       losses: user?.lose_count ?? 0,
       winRate: totalGames > 0 ? Math.round((wins / totalGames) * 100) : 0,
     };
+  }
+
+  /** The user's latest games, newest first. An unknown nickname has no games. */
+  async getRecentGames(username: string, limit = DEFAULT_HISTORY_LIMIT): Promise<GameHistoryEntry[]> {
+    const take = Math.min(Math.max(Math.trunc(limit) || DEFAULT_HISTORY_LIMIT, 1), MAX_HISTORY_LIMIT);
+    const rows = await this.prisma.gameHistory.findMany({
+      where: { user: { username } },
+      orderBy: { created_at: 'desc' },
+      take,
+    });
+    return rows.map((r) => ({
+      id: r.id,
+      role: r.role,
+      isWin: r.is_win,
+      bidScore: r.bid_score,
+      teamPoints: r.team_points,
+      giruda: r.giruda,
+      createdAt: r.created_at,
+    }));
   }
 
   /**
