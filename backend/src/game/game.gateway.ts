@@ -13,7 +13,7 @@ import { Server, Socket } from 'socket.io';
 import { Logger, UseFilters, UsePipes, ValidationPipe } from '@nestjs/common';
 import { GameService } from './game.service';
 import { PrismaService } from '../prisma/prisma.service';
-import { GAME_EVENTS, TRICK_RESOLVED_DELAY_MS } from './constants';
+import { GAME_EVENTS, TRICK_RESOLVED_DELAY_MS, getAiTurnDelayMs } from './constants';
 import { SeatPosition } from './constants';
 import { GameWsExceptionFilter } from './game-ws-exception.filter';
 import { Ack, GAME_NAMESPACE, RoomAckData, RoomIdAckData } from './protocol';
@@ -41,7 +41,12 @@ interface ManagedRoom {
   finished?: boolean;
   /** Fires after TRICK_RESOLVED_DELAY_MS to start the next trick / finish the game. */
   resolveTimer?: NodeJS.Timeout;
+  /** Consecutive failed AI steps; the driver gives up after MAX_AI_FAILURES instead of looping on an error. */
+  aiFailures?: number;
 }
+
+const MAX_AI_FAILURES = 3;
+const AI_ACTIVE_PHASES = ['BIDDING', 'KITTY_EXCHANGE', 'FRIEND_SELECTION', 'TRICK_PLAYING'];
 
 // CORS origins are configured via the CORS_ORIGIN env var in main.ts (CorsIoAdapter).
 @WebSocketGateway({ namespace: GAME_NAMESPACE })
@@ -66,12 +71,14 @@ export class GameGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
 
   handleDisconnect(client: Socket) {
     for (const [roomId, managed] of this.rooms.entries()) {
-      if (managed.socketByPlayerId.has(client.id)) {
-        const playerId = managed.socketByPlayerId.get(client.id)!;
-        this.clearAiTimers(roomId);
-        this.server.to(roomId).emit(GAME_EVENTS.PLAYER_LEFT, { roomId, playerId });
-        break;
-      }
+      // socketByPlayerId is keyed by playerId, so look the player up by socket id.
+      const playerId = [...managed.socketByPlayerId.entries()].find(([, socketId]) => socketId === client.id)?.[0];
+      if (playerId === undefined) continue;
+      // Pause the game: nobody is there to watch. Joining the room again resumes it (see resumeRoom).
+      this.clearAiTimers(roomId);
+      managed.socketByPlayerId.delete(playerId);
+      this.server.to(roomId).emit(GAME_EVENTS.PLAYER_LEFT, { roomId, playerId });
+      break;
     }
   }
 
@@ -148,92 +155,136 @@ export class GameGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
     }
   }
 
-  private scheduleAiTurn(roomId: string, delayMs = 1500) {
-    const managed = this.getManaged(roomId);
+  /**
+   * Auto Turn Driver. If it is an AI's turn, performs exactly one AI action after a random
+   * 1~1.5s delay, broadcasts the state and schedules the next step. It stops by itself when the
+   * room is gone or finished, in phases without an AI action (e.g. TRICK_RESOLVED, which has its
+   * own timer), on a human's turn, and after repeated errors.
+   */
+  private scheduleAiTurn(roomId: string, delayMs = getAiTurnDelayMs()) {
+    const managed = this.rooms.get(roomId);
+    if (!managed || managed.finished) return;
     const engine = managed.engine;
-    if (
-      engine.state.phase !== 'BIDDING' &&
-      engine.state.phase !== 'KITTY_EXCHANGE' &&
-      engine.state.phase !== 'FRIEND_SELECTION' &&
-      engine.state.phase !== 'TRICK_PLAYING'
-    ) {
-      return;
-    }
+    if (!AI_ACTIVE_PHASES.includes(engine.state.phase)) return;
     const turnPlayer = engine.state.players[engine.state.currentTurnIndex];
     if (!turnPlayer || !turnPlayer.isAi) return;
+    const turnPlayerId = turnPlayer.id;
 
-    const existing = managed.aiTimers.get(turnPlayer.id);
+    const existing = managed.aiTimers.get(turnPlayerId);
     if (existing) clearTimeout(existing);
 
-    const timer = setTimeout(async () => {
-      managed.aiTimers.delete(turnPlayer.id);
+    const timer = setTimeout(() => {
+      managed.aiTimers.delete(turnPlayerId);
+      // The room may have been deleted/finished, or the turn moved on, while the timer was pending.
+      if (this.rooms.get(roomId) !== managed || managed.finished) return;
+      const current = engine.state.players[engine.state.currentTurnIndex];
+      if (!AI_ACTIVE_PHASES.includes(engine.state.phase) || !current?.isAi || current.id !== turnPlayerId) return;
+
+      let failed = false;
       try {
-        if (engine.state.phase === 'BIDDING') {
-          const aiHand = turnPlayer.hand;
-          const decision = selectBid({ hand: aiHand, currentBid: engine.state.highestBid });
-          const isPass = decision.bid === null;
-          const result = engine.placeBid(turnPlayer.id, {
-            pass: isPass,
-            score: decision.bid ?? undefined,
-            giruda: decision.giruda ?? undefined,
-          });
-          this.emitBidResult(roomId, turnPlayer.id, decision.bid, decision.giruda, isPass, result);
-        } else if (engine.state.phase === 'KITTY_EXCHANGE') {
-          // The AI president keeps the bid giruda and drops its 3 weakest cards.
-          const decision = selectKittyDiscard({
-            cards: [...turnPlayer.hand, ...engine.state.kitty],
-            giruda: engine.state.giruda as string,
-          });
-          const result = engine.exchangeKitty(turnPlayer.id, decision);
-          this.emitKittyExchanged(roomId, turnPlayer.id, result);
-        } else if (engine.state.phase === 'FRIEND_SELECTION') {
-          const decision = selectFriendDeclaration({
-            hand: turnPlayer.hand,
-            giruda: engine.state.giruda as string,
-          });
-          const result = engine.declareFriend(turnPlayer.id, decision);
-          this.emitFriendDeclared(roomId, turnPlayer.id, result);
-        } else if (engine.state.phase === 'TRICK_PLAYING') {
-          const currentTrickPlays = engine.state.currentTrick?.cards ?? [];
-          const winnerOfCurrent = currentTrickPlays.length > 0 ? currentTrickPlays[currentTrickPlays.length - 1] : null;
-          const isPartnerWinning = winnerOfCurrent
-            ? winnerOfCurrent.playerId === engine.state.ownerPlayerId ||
-              winnerOfCurrent.playerId === engine.state.friendPlayerId
-            : false;
-          const decision = selectCardToPlay({
-            hand: turnPlayer.hand,
-            leadSuit: engine.state.currentTrick?.leadSuit,
-            currentTrickPlays,
-            giruda: engine.state.giruda as string,
-            trickNumber: engine.state.currentTrickNumber,
-            totalTricks: TOTAL_TRICKS,
-            isPartnerWinningCurrentTrick: isPartnerWinning,
-            mightyCard: engine.mightyCard,
-            jokerCallCard: engine.jokerCallCard,
-            restrictGirudaLead: engine.restrictsGirudaLead(),
-            isJokerCallActive: engine.state.isJokerCallActive,
-          });
-          const result = engine.playCard(turnPlayer.id, decision.cardId, {
-            jokerCall: decision.jokerCall,
-            jokerLeadSuit: decision.jokerLeadSuit,
-          });
-          this.server.to(roomId).emit(GAME_EVENTS.CARD_PLAYED, {
-            roomId,
-            playerId: turnPlayer.id,
-            cardId: decision.cardId,
-          });
-          if (result.friendRevealed) this.emitFriendRevealed(roomId, result.friendRevealed);
-          this.handleTrickResult(roomId, managed, result);
-        }
+        this.runAiStep(roomId, managed, current);
+        managed.aiFailures = 0;
       } catch (e) {
-        this.logger.error(`AI turn error: ${(e as Error).message}`);
-      } finally {
-        this.broadcastState(managed);
+        failed = true;
+        managed.aiFailures = (managed.aiFailures ?? 0) + 1;
+        this.logger.error(`AI turn error (${managed.aiFailures}/${MAX_AI_FAILURES}): ${(e as Error).message}`);
+      }
+
+      this.broadcastState(managed);
+      if (engine.state.phase === 'GAME_OVER') {
+        this.finishGameIfOver(roomId);
+      } else if (!failed || (managed.aiFailures ?? 0) < MAX_AI_FAILURES) {
         this.scheduleAiTurn(roomId);
       }
     }, delayMs);
 
-    managed.aiTimers.set(turnPlayer.id, timer);
+    managed.aiTimers.set(turnPlayerId, timer);
+  }
+
+  /** Performs the current AI player's action for the current phase. Throws on engine errors. */
+  private runAiStep(roomId: string, managed: ManagedRoom, turnPlayer: Player) {
+    const engine = managed.engine;
+    switch (engine.state.phase) {
+      case 'BIDDING': {
+        const decision = selectBid({ hand: turnPlayer.hand, currentBid: engine.state.highestBid });
+        const isPass = decision.bid === null;
+        const result = engine.placeBid(turnPlayer.id, {
+          pass: isPass,
+          score: decision.bid ?? undefined,
+          giruda: decision.giruda ?? undefined,
+        });
+        this.emitBidResult(roomId, turnPlayer.id, decision.bid, decision.giruda, isPass, result);
+        break;
+      }
+      case 'KITTY_EXCHANGE': {
+        // The AI president keeps the bid giruda and drops its 3 weakest cards.
+        const decision = selectKittyDiscard({
+          cards: [...turnPlayer.hand, ...engine.state.kitty],
+          giruda: engine.state.giruda as string,
+        });
+        const result = engine.exchangeKitty(turnPlayer.id, decision);
+        this.emitKittyExchanged(roomId, turnPlayer.id, result);
+        break;
+      }
+      case 'FRIEND_SELECTION': {
+        const decision = selectFriendDeclaration({
+          hand: turnPlayer.hand,
+          giruda: engine.state.giruda as string,
+        });
+        const result = engine.declareFriend(turnPlayer.id, decision);
+        this.emitFriendDeclared(roomId, turnPlayer.id, result);
+        break;
+      }
+      case 'TRICK_PLAYING': {
+        const currentTrickPlays = engine.state.currentTrick?.cards ?? [];
+        // The AI treats the current trick winner as a partner only if it can actually know the team.
+        const currentWinner = engine.getCurrentTrickWinner();
+        const isPartnerWinning = currentWinner ? engine.isAllyOf(turnPlayer.id, currentWinner.winnerPlayerId) : false;
+        const decision = selectCardToPlay({
+          hand: turnPlayer.hand,
+          leadSuit: engine.state.currentTrick?.leadSuit,
+          currentTrickPlays,
+          giruda: engine.state.giruda as string,
+          trickNumber: engine.state.currentTrickNumber,
+          totalTricks: TOTAL_TRICKS,
+          isPartnerWinningCurrentTrick: isPartnerWinning,
+          mightyCard: engine.mightyCard,
+          jokerCallCard: engine.jokerCallCard,
+          restrictGirudaLead: engine.restrictsGirudaLead(),
+          isJokerCallActive: engine.state.isJokerCallActive,
+        });
+        const result = engine.playCard(turnPlayer.id, decision.cardId, {
+          jokerCall: decision.jokerCall,
+          jokerLeadSuit: decision.jokerLeadSuit,
+        });
+        this.server.to(roomId).emit(GAME_EVENTS.CARD_PLAYED, {
+          roomId,
+          playerId: turnPlayer.id,
+          cardId: decision.cardId,
+        });
+        if (result.friendRevealed) this.emitFriendRevealed(roomId, result.friendRevealed);
+        this.handleTrickResult(roomId, managed, result);
+        break;
+      }
+    }
+  }
+
+  /**
+   * Restarts whatever the server has to drive after a pause (client reconnected): the AI turn,
+   * the pending trick advance, or the game end.
+   */
+  private resumeRoom(roomId: string) {
+    const managed = this.rooms.get(roomId);
+    if (!managed || managed.finished) return;
+    managed.aiFailures = 0;
+    const phase = managed.engine.state.phase;
+    if (phase === 'TRICK_RESOLVED') {
+      this.scheduleTrickAdvance(roomId, managed);
+    } else if (phase === 'GAME_OVER') {
+      this.finishGameIfOver(roomId);
+    } else {
+      this.scheduleAiTurn(roomId);
+    }
   }
 
   /**
@@ -268,9 +319,16 @@ export class GameGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
       friendPlayerId: engine.state.friendPlayerId,
     });
 
+    this.scheduleTrickAdvance(roomId, managed);
+  }
+
+  /** Starts the next trick (or ends the game) once the TRICK_RESOLVED delay has passed. */
+  private scheduleTrickAdvance(roomId: string, managed: ManagedRoom) {
     if (managed.resolveTimer) clearTimeout(managed.resolveTimer);
     managed.resolveTimer = setTimeout(() => {
       managed.resolveTimer = undefined;
+      if (this.rooms.get(roomId) !== managed || managed.finished) return;
+      const engine = managed.engine;
       try {
         const { gameOver } = engine.advanceAfterTrick();
         this.broadcastState(managed);
@@ -443,6 +501,8 @@ export class GameGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
       players: managed.engine.state.players,
     });
     this.broadcastState(managed);
+    // Rejoining after a disconnect: pick the game up where the server paused it.
+    if (human) this.resumeRoom(dto.roomId);
     return this.ok<RoomAckData>({ roomId: dto.roomId, playerId: human?.id ?? '' });
   }
 
@@ -452,6 +512,11 @@ export class GameGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
     if (managed) {
       managed.socketByPlayerId.delete(data.playerId);
       this.clearAiTimers(data.roomId);
+      // Single-player room: when the human leaves there is nobody left to play for.
+      if (data.playerId === managed.humanPlayerId) {
+        managed.finished = true;
+        this.rooms.delete(data.roomId);
+      }
     }
     this.gameService.leaveRoom(data.roomId, data.playerId);
     client.leave(data.roomId);

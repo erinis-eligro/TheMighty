@@ -53,3 +53,11 @@ export const DEFAULT_BID_MIN = 13;
 
 /** How long a completed trick stays on the board (TRICK_RESOLVED) before the next trick starts. */
 export const TRICK_RESOLVED_DELAY_MS = 1500;
+
+/** AI players act after a random delay in [AI_TURN_DELAY_MIN_MS, AI_TURN_DELAY_MAX_MS]. */
+export const AI_TURN_DELAY_MIN_MS = 1000;
+export const AI_TURN_DELAY_MAX_MS = 1500;
+
+export function getAiTurnDelayMs(random: () => number = Math.random): number {
+  return Math.round(AI_TURN_DELAY_MIN_MS + random() * (AI_TURN_DELAY_MAX_MS - AI_TURN_DELAY_MIN_MS));
+}
