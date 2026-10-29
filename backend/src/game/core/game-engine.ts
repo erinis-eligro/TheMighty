@@ -385,6 +385,23 @@ export class GameEngine {
   }
 
   /**
+   * The player's own side as the AI may know it: the president, the friend (a friend knows
+   * it is the friend even before the reveal) or the opposition. Server-side use only.
+   */
+  getTeamRole(playerId: string): 'PRESIDENT' | 'FRIEND' | 'OPPOSITION' {
+    if (playerId === this.state.ownerPlayerId) return 'PRESIDENT';
+    return this.isFriend(playerId) ? 'FRIEND' : 'OPPOSITION';
+  }
+
+  /** Every card played so far (finished tricks and the current one); public information. */
+  getPlayedCards(): Card[] {
+    const tricks = this.state.currentTrick ? [...this.state.trickHistory, this.state.currentTrick] : this.state.trickHistory;
+    const unique = new Map<string, Card>();
+    for (const t of tricks) for (const p of t.cards) unique.set(p.card.id, p.card);
+    return [...unique.values()];
+  }
+
+  /**
    * Whether `otherId` is known to be on the same team as `viewerId` (see `isAlly`).
    * Respects the hidden friend: nothing is inferred from information the viewer
    * would not have.

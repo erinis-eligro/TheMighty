@@ -219,5 +219,14 @@ test('selectFriendDeclaration picks a card the AI president does not hold', () =
   const withMighty = [card('SPADE', 'A', 'm')];
   assert.deepEqual(selectFriendDeclaration({ hand: withMighty, giruda: 'HEART' }), { type: 'JOKER' });
   const both = [card('SPADE', 'A', 'm'), card('JOKER', '2', 'j')];
-  assert.deepEqual(selectFriendDeclaration({ hand: both, giruda: 'HEART' }), { type: 'NO_FRIEND' });
+  assert.deepEqual(selectFriendDeclaration({ hand: both, giruda: 'HEART' }), { type: 'CARD', suit: 'HEART', rank: 'A' });
+  const withAce = [...both, card('HEART', 'A', 'ha')];
+  assert.deepEqual(selectFriendDeclaration({ hand: withAce, giruda: 'HEART' }), { type: 'CARD', suit: 'HEART', rank: 'K' });
+  const all = [...withAce, card('HEART', 'K', 'hk')];
+  assert.deepEqual(selectFriendDeclaration({ hand: all, giruda: 'HEART' }), { type: 'NO_FRIEND' });
+  // A discarded card is held by nobody, so it is not worth calling.
+  const discarded = [card('HEART', 'A', 'x')];
+  assert.deepEqual(selectFriendDeclaration({ hand: both, giruda: 'HEART', discarded }), { type: 'CARD', suit: 'HEART', rank: 'K' });
+  // No giruda: after mighty and joker the side-suit aces are called.
+  assert.deepEqual(selectFriendDeclaration({ hand: both, giruda: 'NO_GIRUDA' }), { type: 'CARD', suit: 'DIAMOND', rank: 'A' });
 });
