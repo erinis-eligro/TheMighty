@@ -61,3 +61,6 @@ export const AI_TURN_DELAY_MAX_MS = 1500;
 export function getAiTurnDelayMs(random: () => number = Math.random): number {
   return Math.round(AI_TURN_DELAY_MIN_MS + random() * (AI_TURN_DELAY_MAX_MS - AI_TURN_DELAY_MIN_MS));
 }
+
+/** How long a session survives after its human disconnected; afterwards it is deleted. */
+export const SESSION_TTL_MS = 5 * 60 * 1000;

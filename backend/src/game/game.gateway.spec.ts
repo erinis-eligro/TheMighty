@@ -3,7 +3,7 @@ import type { Server, Socket } from 'socket.io';
 import { GameGateway } from './game.gateway';
 import { GameService } from './game.service';
 import { PrismaService } from '../prisma/prisma.service';
-import { GAME_EVENTS } from './constants';
+import { GAME_EVENTS, SESSION_TTL_MS } from './constants';
 
 type Emit = { room: string; event: string; payload: unknown };
 
@@ -22,7 +22,7 @@ function setup() {
   const gateway = new GameGateway(service, prisma);
   (gateway as unknown as { server: Server }).server = server;
   const client = { id: 'sock-1', join: jest.fn(), leave: jest.fn(), emit: jest.fn() } as unknown as Socket;
-  return { gateway, client, emitted, saved };
+  return { gateway, service, client, emitted, saved };
 }
 
 /** Creates a room whose human seat is driven by the AI too, so a whole game runs on server timers. */
@@ -31,7 +31,7 @@ function startAllAiGame() {
   const { roomId } = (ctx.gateway.handleCreateRoom(ctx.client, { username: 'human' }) as {
     data: { roomId: string };
   }).data;
-  const managed = (ctx.gateway as any).rooms.get(roomId);
+  const managed = ctx.service.findSession(roomId)!;
   managed.engine.state.players[0].isAi = true;
   ctx.gateway.handleStartGame(ctx.client, { roomId });
   return { ...ctx, roomId, managed };
@@ -64,7 +64,7 @@ describe('Auto Turn Driver', () => {
     // The human bids first: nothing to schedule.
     assert.equal(jest.getTimerCount(), 0);
     jest.advanceTimersByTime(10_000);
-    const managed = (ctx.gateway as any).rooms.get(roomId);
+    const managed = ctx.service.findSession(roomId)!;
     assert.equal(managed.engine.state.currentTurnIndex, 0);
     assert.equal(managed.engine.state.phase, 'BIDDING');
   });
@@ -79,17 +79,22 @@ describe('Auto Turn Driver', () => {
   });
 
   test('a disconnect stops all timers and rejoining resumes the game', () => {
-    const { gateway, client, managed, roomId } = startAllAiGame();
-    managed.socketByPlayerId.set(managed.humanPlayerId, client.id);
+    const { gateway, service, client, managed, roomId } = startAllAiGame();
     jest.advanceTimersByTime(3000);
     gateway.handleDisconnect(client);
-    assert.equal(jest.getTimerCount(), 0);
+    // No game timer is left; only the session expiry (TTL) timer is pending.
+    assert.equal(managed.aiTimers.size, 0);
+    assert.equal(managed.resolveTimer, undefined);
+    assert.ok(managed.expiryTimer);
+    assert.equal(jest.getTimerCount(), 1);
     const snapshot = JSON.stringify(managed.engine.state.players.map((p: any) => p.hand.length));
     jest.advanceTimersByTime(20_000);
     assert.equal(JSON.stringify(managed.engine.state.players.map((p: any) => p.hand.length)), snapshot);
 
     // The test turned the human seat into an AI, so handleJoinRoom would not find him; resume directly.
+    service.bindSocket(managed, client.id);
     (gateway as any).resumeRoom(roomId);
+    assert.equal(managed.expiryTimer, undefined);
     assert.ok(jest.getTimerCount() > 0);
     for (let i = 0; i < 2000 && managed.engine.state.phase !== 'GAME_OVER'; i++) {
       jest.advanceTimersByTime(500);
@@ -98,11 +103,11 @@ describe('Auto Turn Driver', () => {
   });
 
   test('leaving the room removes it and clears the timers', () => {
-    const { gateway, client, managed, roomId } = startAllAiGame();
+    const { gateway, service, client, managed, roomId } = startAllAiGame();
     jest.advanceTimersByTime(3000);
     gateway.handleLeaveRoom(client, { roomId, playerId: managed.humanPlayerId });
     assert.equal(jest.getTimerCount(), 0);
-    assert.equal((gateway as any).rooms.has(roomId), false);
+    assert.equal(service.findSession(roomId) !== undefined, false);
   });
 });
 
@@ -115,11 +120,11 @@ describe('Information hiding and identity', () => {
   function startHumanGame() {
     const ctx = setup();
     const client = makeClient('sock-1');
-    const { roomId, playerId } = (ctx.gateway.handleCreateRoom(client, { username: 'human' }) as {
-      data: { roomId: string; playerId: string };
+    const { roomId, playerId, rejoinToken } = (ctx.gateway.handleCreateRoom(client, { username: 'human' }) as {
+      data: { roomId: string; playerId: string; rejoinToken: string };
     }).data;
-    const managed = (ctx.gateway as any).rooms.get(roomId);
-    return { ...ctx, client, roomId, playerId, managed };
+    const managed = ctx.service.findSession(roomId)!;
+    return { ...ctx, client, roomId, playerId, rejoinToken, managed };
   }
 
   const handsOf = (players: any[]) => players.filter((p) => p.hand.some((c: any) => !c.hidden));
@@ -148,9 +153,9 @@ describe('Information hiding and identity', () => {
   });
 
   test('room_joined is masked for the joining player', () => {
-    const { gateway, roomId, playerId } = startHumanGame();
+    const { gateway, roomId, playerId, rejoinToken } = startHumanGame();
     const client2 = makeClient('sock-2');
-    gateway.handleJoinRoom(client2, { roomId, username: 'human' });
+    gateway.handleJoinRoom(client2, { roomId, rejoinToken });
     const joined = client2.emit.mock.calls.find((c) => c[0] === GAME_EVENTS.ROOM_JOINED)![1];
     assert.equal(joined.playerId, playerId);
     assert.ok(joined.players.every((p: any) => !('socketId' in p)));
@@ -220,9 +225,21 @@ describe('Information hiding and identity', () => {
   });
 
   test('leave_room only works for the player bound to the socket', () => {
-    const { gateway, roomId, playerId } = startHumanGame();
+    const { gateway, service, roomId, playerId } = startHumanGame();
     gateway.handleLeaveRoom(makeClient('sock-x'), { roomId, playerId });
-    assert.equal((gateway as any).rooms.has(roomId), true);
+    assert.equal(service.findSession(roomId) !== undefined, true);
+  });
+
+  test('join_room is a rejoin: it needs the rejoin token, never a nickname or room id alone', () => {
+    const { gateway, roomId, rejoinToken, managed } = startHumanGame();
+    const stranger = makeClient('sock-x');
+    assert.throws(() => gateway.handleJoinRoom(stranger, { roomId, rejoinToken: 'nope' }), /Cannot rejoin/);
+    assert.throws(() => gateway.handleJoinRoom(stranger, { roomId, rejoinToken: undefined as any }), /Cannot rejoin/);
+    assert.equal(managed.humanSocketId, 'sock-1');
+    assert.equal((stranger.join as jest.Mock).mock.calls.length, 0);
+    // The stolen-nickname path is gone: the rejoin token is the only way in.
+    gateway.handleJoinRoom(stranger, { roomId, rejoinToken });
+    assert.equal(managed.humanSocketId, 'sock-x');
   });
 
   test('state_sync carries the server computed playableCardIds only on the viewer\'s turn', () => {
@@ -243,5 +260,70 @@ describe('Information hiding and identity', () => {
     assert.ok(ids.length > 0);
     assert.ok(ids.every((id) => hand.some((c: any) => c.id === id)));
     assert.deepEqual((gateway as any).publicState(managed, 'ai-0').playableCardIds, []);
+  });
+});
+
+describe('Session lifecycle', () => {
+  const makeClient = (id: string) =>
+    ({ id, join: jest.fn(), leave: jest.fn(), emit: jest.fn() }) as unknown as Socket & { emit: jest.Mock };
+
+  beforeEach(() => jest.useFakeTimers());
+  afterEach(() => jest.useRealTimers());
+
+  function create() {
+    const ctx = setup();
+    const client = makeClient('sock-1');
+    const { roomId, rejoinToken } = (ctx.gateway.handleCreateRoom(client, { username: 'human' }) as {
+      data: { roomId: string; rejoinToken: string };
+    }).data;
+    return { ...ctx, client, roomId, rejoinToken };
+  }
+
+  test('start_game is idempotent: a second call neither redeals nor reschedules', () => {
+    const { gateway, service, client, roomId } = create();
+    const first = gateway.handleStartGame(client, { roomId });
+    assert.deepEqual(first.data, { roomId, alreadyStarted: false });
+    const hand = JSON.stringify(service.findSession(roomId)!.engine.state.players[0].hand);
+    const second = gateway.handleStartGame(client, { roomId });
+    assert.deepEqual(second.data, { roomId, alreadyStarted: true });
+    assert.equal(JSON.stringify(service.findSession(roomId)!.engine.state.players[0].hand), hand);
+    assert.equal(service.findSession(roomId)!.engine.state.phase, 'BIDDING');
+  });
+
+  test('start_game from a socket not bound to the room is rejected', () => {
+    const { gateway, service, roomId } = create();
+    assert.throws(() => gateway.handleStartGame(makeClient('sock-x'), { roomId }), /not bound/);
+    assert.equal(service.findSession(roomId)!.engine.state.phase, 'READY');
+  });
+
+  test('the session is deleted with all timers after the disconnect TTL', () => {
+    const { gateway, service, client, roomId } = create();
+    gateway.handleStartGame(client, { roomId });
+    gateway.handleDisconnect(client);
+    assert.ok(service.findSession(roomId));
+    jest.advanceTimersByTime(SESSION_TTL_MS - 1);
+    assert.ok(service.findSession(roomId));
+    jest.advanceTimersByTime(1);
+    assert.equal(service.findSession(roomId), undefined);
+    assert.equal(jest.getTimerCount(), 0);
+  });
+
+  test('rejoining before the TTL keeps the session', () => {
+    const { gateway, service, client, roomId, rejoinToken } = create();
+    gateway.handleStartGame(client, { roomId });
+    gateway.handleDisconnect(client);
+    jest.advanceTimersByTime(SESSION_TTL_MS - 1000);
+    gateway.handleJoinRoom(makeClient('sock-2'), { roomId, rejoinToken });
+    jest.advanceTimersByTime(SESSION_TTL_MS * 2);
+    assert.ok(service.findSession(roomId));
+  });
+
+  test('a stale socket disconnecting after a rejoin does not pause the new connection', () => {
+    const { gateway, service, client, roomId, rejoinToken } = create();
+    gateway.handleStartGame(client, { roomId });
+    gateway.handleJoinRoom(makeClient('sock-2'), { roomId, rejoinToken });
+    gateway.handleDisconnect(client);
+    assert.equal(service.findSession(roomId)!.humanSocketId, 'sock-2');
+    assert.equal(service.findSession(roomId)!.expiryTimer, undefined);
   });
 });

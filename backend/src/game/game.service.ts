@@ -1,75 +1,35 @@
-import { Injectable, NotFoundException, BadRequestException, Logger, Inject } from '@nestjs/common';
-import { v4 as uuidv4 } from 'uuid';
+import { Injectable, Logger, OnModuleDestroy } from '@nestjs/common';
+import { randomUUID, timingSafeEqual } from 'crypto';
 import { PrismaService } from '../prisma/prisma.service';
 import { Role, Giruda } from '@prisma/client';
-import { Room, GameState, Player, Card, Trick } from './entities/game.entity';
-import { SeatPosition } from './constants';
-import { GAME_EVENTS } from './constants';
-import { CreateRoomDto, JoinRoomDto, PlaceBidDto, PlayCardDto } from './dto/game.dto';
+import { GameSession, Player } from './entities/game.entity';
+import { SEAT_POSITIONS, SESSION_TTL_MS } from './constants';
+import { GameEngine, generateAiName } from './core';
 
+/**
+ * Owns every game session (the single store of rooms). The gateway is only the transport:
+ * it looks sessions up here, and the socket/timer bookkeeping lives on the session.
+ */
 @Injectable()
-export class GameService {
+export class GameService implements OnModuleDestroy {
   private readonly logger = new Logger(GameService.name);
-  private readonly rooms = new Map<string, Room>();
+  private readonly sessions = new Map<string, GameSession>();
 
   constructor(private readonly prisma: PrismaService) {}
 
-  createRoom(dto: CreateRoomDto, socketId: string): Room {
-    const roomId = uuidv4();
-    const playerId = uuidv4();
-    const hostPlayer: Player = {
-      id: playerId,
-      socketId,
-      username: dto.username,
-      seat: 'bottom',
-      hand: [],
-      isReady: false,
-      isAi: false,
-      collectedScoreCards: [],
-      score: 0,
-      isFriend: false,
-      isOwner: true,
-    };
-
-    const room: Room = {
-      id: roomId,
-      hostId: playerId,
-      players: new Map([[playerId, hostPlayer]]),
-      gameState: null,
-      createdAt: new Date(),
-    };
-
-    this.rooms.set(roomId, room);
-    this.logger.log(`Room created: ${roomId} by ${dto.username} (${playerId})`);
-    return room;
+  onModuleDestroy(): void {
+    for (const id of [...this.sessions.keys()]) this.deleteSession(id);
   }
 
-  joinRoom(dto: JoinRoomDto, socketId: string): { room: Room; playerId: string } {
-    const room = this.rooms.get(dto.roomId);
-    if (!room) {
-      throw new NotFoundException(`Room ${dto.roomId} not found`);
-    }
-
-    if (room.players.size >= 5) {
-      throw new BadRequestException('Room is full (max 5 players)');
-    }
-
-    const seats: SeatPosition[] = ['top', 'left', 'right', 'center'];
-    let assignedSeat: SeatPosition = 'center';
-    for (const seat of seats) {
-      const taken = Array.from(room.players.values()).some((p) => p.seat === seat);
-      if (!taken) {
-        assignedSeat = seat;
-        break;
-      }
-    }
-
-    const playerId = uuidv4();
-    const player: Player = {
-      id: playerId,
-      socketId,
-      username: dto.username,
-      seat: assignedSeat,
+  /** Creates a single-player session: the human at `bottom` plus 4 AI players. */
+  createSession(username: string, socketId: string): GameSession {
+    const roomId = randomUUID();
+    const humanPlayerId = randomUUID();
+    const human: Player = {
+      id: humanPlayerId,
+      socketId: '',
+      username,
+      seat: SEAT_POSITIONS[0],
       hand: [],
       isReady: false,
       isAi: false,
@@ -78,43 +38,106 @@ export class GameService {
       isFriend: false,
       isOwner: false,
     };
+    const ais: Player[] = SEAT_POSITIONS.slice(1).map((seat, i) => ({
+      id: `ai-${i}`,
+      socketId: '',
+      username: generateAiName(i),
+      seat,
+      hand: [],
+      isReady: false,
+      isAi: true,
+      collectedScoreCards: [],
+      score: 0,
+      isFriend: false,
+      isOwner: false,
+    }));
 
-    room.players.set(playerId, player);
-    this.logger.log(`Player ${dto.username} (${playerId}) joined room ${dto.roomId} at ${assignedSeat}`);
-    return { room, playerId };
+    const engine = new GameEngine({ players: [human, ...ais], giruda: 'NO_GIRUDA' });
+    engine.state.roomId = roomId;
+
+    const session: GameSession = {
+      id: roomId,
+      engine,
+      humanPlayerId,
+      username,
+      rejoinToken: randomUUID(),
+      humanSocketId: socketId,
+      aiTimers: new Map(),
+      createdAt: new Date(),
+    };
+    this.sessions.set(roomId, session);
+    this.logger.log(`Session created: ${roomId} by ${username} (${humanPlayerId})`);
+    return session;
   }
 
-  leaveRoom(roomId: string, playerId: string): void {
-    const room = this.rooms.get(roomId);
-    if (!room) return;
-    room.players.delete(playerId);
-    if (room.players.size === 0) {
-      this.rooms.delete(roomId);
-      this.logger.log(`Room ${roomId} deleted (empty)`);
-    } else {
-      this.logger.log(`Player ${playerId} left room ${roomId}`);
+  findSession(roomId: string): GameSession | undefined {
+    return this.sessions.get(roomId);
+  }
+
+  findSessionBySocket(socketId: string): GameSession | undefined {
+    for (const session of this.sessions.values()) {
+      if (session.humanSocketId === socketId) return session;
+    }
+    return undefined;
+  }
+
+  /** Constant-time comparison of the rejoin token the client presented. */
+  verifyRejoinToken(session: GameSession, token: string | undefined): boolean {
+    if (typeof token !== 'string') return false;
+    const expected = Buffer.from(session.rejoinToken);
+    const given = Buffer.from(token);
+    return expected.length === given.length && timingSafeEqual(expected, given);
+  }
+
+  /** Binds a (new) socket to the human seat and cancels a pending disconnect expiry. */
+  bindSocket(session: GameSession, socketId: string): void {
+    session.humanSocketId = socketId;
+    this.cancelExpiry(session);
+  }
+
+  /** Unbinds the socket if it is still the bound one (a stale socket is ignored). Returns whether it was. */
+  unbindSocket(session: GameSession, socketId: string): boolean {
+    if (session.humanSocketId !== socketId) return false;
+    session.humanSocketId = undefined;
+    return true;
+  }
+
+  /** Stops the AI turns and the pending trick advance (e.g. nobody is watching). */
+  clearGameTimers(session: GameSession): void {
+    for (const t of session.aiTimers.values()) clearTimeout(t);
+    session.aiTimers.clear();
+    if (session.resolveTimer) {
+      clearTimeout(session.resolveTimer);
+      session.resolveTimer = undefined;
     }
   }
 
-  getRoom(roomId: string): Room {
-    const room = this.rooms.get(roomId);
-    if (!room) throw new NotFoundException(`Room ${roomId} not found`);
-    return room;
+  /** Deletes the session unless the human rejoins within `ttlMs`. */
+  scheduleExpiry(session: GameSession, ttlMs = SESSION_TTL_MS): void {
+    this.cancelExpiry(session);
+    session.expiryTimer = setTimeout(() => {
+      session.expiryTimer = undefined;
+      this.logger.log(`Session ${session.id} expired (human disconnected)`);
+      this.deleteSession(session.id);
+    }, ttlMs);
   }
 
-  getPlayerSocketId(roomId: string, playerId: string): string {
-    const room = this.getRoom(roomId);
-    const player = room.players.get(playerId);
-    if (!player) throw new NotFoundException(`Player ${playerId} not found in room ${roomId}`);
-    return player.socketId;
+  private cancelExpiry(session: GameSession): void {
+    if (session.expiryTimer) {
+      clearTimeout(session.expiryTimer);
+      session.expiryTimer = undefined;
+    }
   }
 
-  listRooms(): Array<{ id: string; playerCount: number; hostId: string }> {
-    return Array.from(this.rooms.entries()).map(([id, room]) => ({
-      id,
-      playerCount: room.players.size,
-      hostId: room.hostId,
-    }));
+  /** Removes the session and clears every timer; pending timer callbacks see `finished` and stop. */
+  deleteSession(roomId: string): void {
+    const session = this.sessions.get(roomId);
+    if (!session) return;
+    session.finished = true;
+    this.clearGameTimers(session);
+    this.cancelExpiry(session);
+    this.sessions.delete(roomId);
+    this.logger.log(`Session ${roomId} deleted`);
   }
 
   /**

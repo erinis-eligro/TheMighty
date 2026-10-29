@@ -1,9 +1,13 @@
-import { IsString, IsUUID, IsNumber, IsBoolean, IsOptional, IsArray, ValidateNested, IsIn, IsEnum } from 'class-validator';
-import { Type } from 'class-transformer';
+import { IsString, IsUUID, IsNumber, IsBoolean, IsOptional, IsArray, ValidateNested, IsIn, IsEnum, MinLength, MaxLength } from 'class-validator';
+import { Transform, Type } from 'class-transformer';
 import { Role, Giruda } from '@prisma/client';
 
 export class CreateRoomDto {
+  /** Display/stats nickname; trimmed. Identity of the session is the rejoin token, not the nickname. */
+  @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
   @IsString()
+  @MinLength(1)
+  @MaxLength(50)
   username!: string;
 }
 
@@ -12,8 +16,10 @@ export class JoinRoomDto {
   @IsUUID()
   roomId!: string;
 
+  /** Secret returned by create_room; proves the caller owns the session. */
   @IsString()
-  username!: string;
+  @MinLength(1)
+  rejoinToken!: string;
 }
 
 export class PlaceBidDto {

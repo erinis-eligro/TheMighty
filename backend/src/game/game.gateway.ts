@@ -9,41 +9,24 @@ import {
   MessageBody,
   WsException,
 } from '@nestjs/websockets';
-import { Server, Socket } from 'socket.io';
+import { Namespace, Server, Socket } from 'socket.io';
 import { Logger, UseFilters, UsePipes, ValidationPipe } from '@nestjs/common';
 import { GameService } from './game.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { GAME_EVENTS, TRICK_RESOLVED_DELAY_MS, getAiTurnDelayMs } from './constants';
-import { SeatPosition } from './constants';
 import { GameWsExceptionFilter } from './game-ws-exception.filter';
-import { Ack, GAME_NAMESPACE, RoomAckData, RoomIdAckData } from './protocol';
+import { Ack, CreateRoomAckData, GAME_NAMESPACE, RoomAckData, RoomIdAckData, StartGameAckData } from './protocol';
 import { CreateRoomDto, DeclareFriendDto, ExchangeKittyDto, JoinRoomDto, PlaceBidDto, PlayCardDto } from './dto/game.dto';
-import { Player, Trick } from './entities/game.entity';
+import { GameSession, Player, Trick } from './entities/game.entity';
 import {
-  GameEngine,
-  createInitialGameState,
   selectBid,
   selectCardToPlay,
   selectFriendDeclaration,
   selectKittyDiscard,
   type FriendReveal,
-  generateAiName,
   TOTAL_TRICKS,
 } from './core';
 import { Role, Giruda } from '@prisma/client';
-
-interface ManagedRoom {
-  engine: GameEngine;
-  humanPlayerId: string;
-  socketByPlayerId: Map<string, string>;
-  aiTimers: Map<string, NodeJS.Timeout>;
-  /** True once game_end was sent and the result was persisted (guards against double saves). */
-  finished?: boolean;
-  /** Fires after TRICK_RESOLVED_DELAY_MS to start the next trick / finish the game. */
-  resolveTimer?: NodeJS.Timeout;
-  /** Consecutive failed AI steps; the driver gives up after MAX_AI_FAILURES instead of looping on an error. */
-  aiFailures?: number;
-}
 
 const MAX_AI_FAILURES = 3;
 const AI_ACTIVE_PHASES = ['BIDDING', 'KITTY_EXCHANGE', 'FRIEND_SELECTION', 'TRICK_PLAYING'];
@@ -54,7 +37,6 @@ const AI_ACTIVE_PHASES = ['BIDDING', 'KITTY_EXCHANGE', 'FRIEND_SELECTION', 'TRIC
 export class GameGateway implements OnGatewayInit, OnGatewayConnection, OnGatewayDisconnect {
   @WebSocketServer() server!: Server;
   private readonly logger = new Logger(GameGateway.name);
-  private readonly rooms = new Map<string, ManagedRoom>();
 
   constructor(
     private readonly gameService: GameService,
@@ -70,33 +52,30 @@ export class GameGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
   }
 
   handleDisconnect(client: Socket) {
-    for (const [roomId, managed] of this.rooms.entries()) {
-      // socketByPlayerId is keyed by playerId, so look the player up by socket id.
-      const playerId = [...managed.socketByPlayerId.entries()].find(([, socketId]) => socketId === client.id)?.[0];
-      if (playerId === undefined) continue;
-      // Pause the game: nobody is there to watch. Joining the room again resumes it (see resumeRoom).
-      this.clearAiTimers(roomId);
-      managed.socketByPlayerId.delete(playerId);
-      this.server.to(roomId).emit(GAME_EVENTS.PLAYER_LEFT, { roomId, playerId });
-      break;
-    }
+    const session = this.gameService.findSessionBySocket(client.id);
+    if (!session) return;
+    // Pause the game: nobody is there to watch. Rejoining resumes it (see resumeRoom); if the human
+    // does not come back within SESSION_TTL_MS the service deletes the session.
+    this.gameService.unbindSocket(session, client.id);
+    this.gameService.clearGameTimers(session);
+    this.gameService.scheduleExpiry(session);
+    this.server.to(session.id).emit(GAME_EVENTS.PLAYER_LEFT, { roomId: session.id, playerId: session.humanPlayerId });
   }
 
-  private clearAiTimers(roomId: string) {
-    const managed = this.rooms.get(roomId);
-    if (!managed) return;
-    for (const [, t] of managed.aiTimers) clearTimeout(t);
-    managed.aiTimers.clear();
-    if (managed.resolveTimer) {
-      clearTimeout(managed.resolveTimer);
-      managed.resolveTimer = undefined;
-    }
-  }
-
-  private getManaged(roomId: string): ManagedRoom {
-    const m = this.rooms.get(roomId);
+  private getManaged(roomId: string): GameSession {
+    const m = this.gameService.findSession(roomId);
     if (!m) throw new WsException({ code: 'ROOM_NOT_FOUND', message: `Room ${roomId} not found` });
     return m;
+  }
+
+  /** The `server` of a namespace gateway is the Namespace itself (it owns the connected sockets). */
+  private get namespace(): Namespace {
+    return this.server as unknown as Namespace;
+  }
+
+  /** The player bound to this socket, if any (a socket id is not a player id). */
+  private boundPlayerId(managed: GameSession, client: Socket): string | undefined {
+    return managed.humanSocketId === client.id ? managed.humanPlayerId : undefined;
   }
 
   private ok<T>(data: T): Ack<T> {
@@ -104,7 +83,7 @@ export class GameGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
   }
 
   /** Players as `forPlayerId` may see them: only his own hand, no socket ids, friend flag only once revealed. */
-  private maskedPlayers(managed: ManagedRoom, forPlayerId: string) {
+  private maskedPlayers(managed: GameSession, forPlayerId: string) {
     const engine = managed.engine;
     return engine.state.players.map((p) => ({
       id: p.id,
@@ -126,8 +105,8 @@ export class GameGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
    * Identity is decided by the server: the player bound to this socket. A `playerId` sent by the
    * client is never trusted; if present it must match the bound player.
    */
-  private resolveHumanPlayer(managed: ManagedRoom, client: Socket, requestedPlayerId?: string): Player {
-    const playerId = [...managed.socketByPlayerId.entries()].find(([, socketId]) => socketId === client.id)?.[0];
+  private resolveHumanPlayer(managed: GameSession, client: Socket, requestedPlayerId?: string): Player {
+    const playerId = this.boundPlayerId(managed, client);
     const player = playerId === undefined ? undefined : managed.engine.state.players.find((p) => p.id === playerId);
     if (!player || player.isAi || (requestedPlayerId !== undefined && requestedPlayerId !== player.id)) {
       throw new WsException({ code: 'INVALID_PLAYER', message: 'This socket is not bound to that player' });
@@ -136,13 +115,13 @@ export class GameGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
   }
 
   /** Sends one event to every bound socket with a payload masked for that socket's player. */
-  private emitMasked(managed: ManagedRoom, event: string, build: (playerId: string) => unknown) {
-    for (const [playerId, socketId] of managed.socketByPlayerId) {
-      this.server.to(socketId).emit(event, build(playerId));
+  private emitMasked(managed: GameSession, event: string, build: (playerId: string) => unknown) {
+    if (managed.humanSocketId) {
+      this.server.to(managed.humanSocketId).emit(event, build(managed.humanPlayerId));
     }
   }
 
-  private publicState(managed: ManagedRoom, forPlayerId: string) {
+  private publicState(managed: GameSession, forPlayerId: string) {
     const engine = managed.engine;
     return {
       roomId: engine.state.roomId,
@@ -178,7 +157,7 @@ export class GameGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
     };
   }
 
-  private broadcastState(managed: ManagedRoom) {
+  private broadcastState(managed: GameSession) {
     this.emitMasked(managed, GAME_EVENTS.STATE_SYNC, (playerId) => this.publicState(managed, playerId));
   }
 
@@ -189,7 +168,7 @@ export class GameGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
    * own timer), on a human's turn, and after repeated errors.
    */
   private scheduleAiTurn(roomId: string, delayMs = getAiTurnDelayMs()) {
-    const managed = this.rooms.get(roomId);
+    const managed = this.gameService.findSession(roomId);
     if (!managed || managed.finished) return;
     const engine = managed.engine;
     if (!AI_ACTIVE_PHASES.includes(engine.state.phase)) return;
@@ -203,7 +182,7 @@ export class GameGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
     const timer = setTimeout(() => {
       managed.aiTimers.delete(turnPlayerId);
       // The room may have been deleted/finished, or the turn moved on, while the timer was pending.
-      if (this.rooms.get(roomId) !== managed || managed.finished) return;
+      if (this.gameService.findSession(roomId) !== managed || managed.finished) return;
       const current = engine.state.players[engine.state.currentTurnIndex];
       if (!AI_ACTIVE_PHASES.includes(engine.state.phase) || !current?.isAi || current.id !== turnPlayerId) return;
 
@@ -229,7 +208,7 @@ export class GameGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
   }
 
   /** Performs the current AI player's action for the current phase. Throws on engine errors. */
-  private runAiStep(roomId: string, managed: ManagedRoom, turnPlayer: Player) {
+  private runAiStep(roomId: string, managed: GameSession, turnPlayer: Player) {
     const engine = managed.engine;
     switch (engine.state.phase) {
       case 'BIDDING': {
@@ -307,7 +286,7 @@ export class GameGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
    * the pending trick advance, or the game end.
    */
   private resumeRoom(roomId: string) {
-    const managed = this.rooms.get(roomId);
+    const managed = this.gameService.findSession(roomId);
     if (!managed || managed.finished) return;
     managed.aiFailures = 0;
     const phase = managed.engine.state.phase;
@@ -327,7 +306,7 @@ export class GameGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
    */
   private handleTrickResult(
     roomId: string,
-    managed: ManagedRoom,
+    managed: GameSession,
     result: { trickComplete?: boolean; trick?: Trick; points?: number }
   ) {
     if (!result.trickComplete || !result.trick) return;
@@ -356,11 +335,11 @@ export class GameGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
   }
 
   /** Starts the next trick (or ends the game) once the TRICK_RESOLVED delay has passed. */
-  private scheduleTrickAdvance(roomId: string, managed: ManagedRoom) {
+  private scheduleTrickAdvance(roomId: string, managed: GameSession) {
     if (managed.resolveTimer) clearTimeout(managed.resolveTimer);
     managed.resolveTimer = setTimeout(() => {
       managed.resolveTimer = undefined;
-      if (this.rooms.get(roomId) !== managed || managed.finished) return;
+      if (this.gameService.findSession(roomId) !== managed || managed.finished) return;
       const engine = managed.engine;
       try {
         const { gameOver } = engine.advanceAfterTrick();
@@ -381,14 +360,14 @@ export class GameGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
    * the scored result, stops the AI timers and saves the human's record.
    */
   private finishGameIfOver(roomId: string): void {
-    const managed = this.rooms.get(roomId);
+    const managed = this.gameService.findSession(roomId);
     if (!managed || managed.finished) return;
     const engine = managed.engine;
     if (engine.state.phase !== 'GAME_OVER') return;
     managed.finished = true;
 
     const result = engine.getResult();
-    this.clearAiTimers(roomId);
+    this.gameService.clearGameTimers(managed);
 
     const human = engine.state.players.find((p) => p.id === managed.humanPlayerId);
     const humanScore = result.players.find((p) => p.playerId === managed.humanPlayerId);
@@ -468,101 +447,66 @@ export class GameGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
   @SubscribeMessage(GAME_EVENTS.CREATE_ROOM)
   @UsePipes(new ValidationPipe({ whitelist: true, transform: true }))
   handleCreateRoom(@ConnectedSocket() client: Socket, @MessageBody() dto: CreateRoomDto) {
-    const roomId = this.gameService.createRoom(dto, client.id).id;
-    const room = this.gameService.getRoom(roomId);
-    const humanId = room.hostId;
-
-    // Build 5 players: human + 4 AI
-    const seats: SeatPosition[] = ['bottom', 'top', 'left', 'right', 'center'];
-    const players = room.players.values();
-    const humanPlayer = players.next().value;
-
-    const allPlayers = [
-      { ...humanPlayer, seat: 'bottom', isAi: false },
-      ...seats.slice(1).map((seat, i) => ({
-        id: `ai-${i}`,
-        socketId: '',
-        username: generateAiName(i),
-        seat,
-        hand: [],
-        isReady: false,
-        isAi: true,
-        collectedScoreCards: [],
-        score: 0,
-        isFriend: false,
-        isOwner: false,
-      })),
-    ];
-
-    const giruda = 'NO_GIRUDA' as Giruda;
-    const engine = new GameEngine({ players: allPlayers as Player[], giruda });
-    engine.state.roomId = roomId;
-
-    const socketByPlayerId = new Map<string, string>([[humanId, client.id]]);
-    this.rooms.set(roomId, {
-      engine,
-      humanPlayerId: humanId,
-      socketByPlayerId,
-      aiTimers: new Map(),
-    });
+    const session = this.gameService.createSession(dto.username, client.id);
+    const roomId = session.id;
+    const humanId = session.humanPlayerId;
 
     client.join(roomId);
-    const managedRoom = this.getManaged(roomId);
     client.emit(GAME_EVENTS.ROOM_CREATED, {
       roomId,
       playerId: humanId,
-      players: this.maskedPlayers(managedRoom, humanId),
-      giruda,
+      players: this.maskedPlayers(session, humanId),
+      giruda: session.engine.state.giruda,
     });
-    this.broadcastState(managedRoom);
+    this.broadcastState(session);
 
     this.logger.log(`CREATE_ROOM: ${roomId} human=${humanId}`);
-    return this.ok<RoomAckData>({ roomId, playerId: humanId });
+    return this.ok<CreateRoomAckData>({ roomId, playerId: humanId, rejoinToken: session.rejoinToken });
   }
 
+  /**
+   * Single-player rejoin: binds this (new) socket to the session's human seat. The caller must
+   * present the rejoin token handed out by create_room; a room id (or nickname) alone is not enough.
+   */
   @SubscribeMessage(GAME_EVENTS.JOIN_ROOM)
   @UsePipes(new ValidationPipe({ whitelist: true, transform: true }))
   handleJoinRoom(@ConnectedSocket() client: Socket, @MessageBody() dto: JoinRoomDto) {
     const managed = this.getManaged(dto.roomId);
+    if (!this.gameService.verifyRejoinToken(managed, dto.rejoinToken)) {
+      throw new WsException({ code: 'INVALID_REJOIN_TOKEN', message: 'Cannot rejoin this room' });
+    }
+    const humanId = managed.humanPlayerId;
+
+    // A previous socket (e.g. another tab) loses the seat: it must stop receiving the room's events.
+    const previous = managed.humanSocketId;
+    if (previous && previous !== client.id) this.namespace.sockets?.get(previous)?.leave(dto.roomId);
+    this.gameService.bindSocket(managed, client.id);
     client.join(dto.roomId);
-    // Spectator/rejoin: map socket to human if matches
-    const human = managed.engine.state.players.find((p) => p.username === dto.username && !p.isAi);
-    if (human) managed.socketByPlayerId.set(human.id, client.id);
 
     client.emit(GAME_EVENTS.ROOM_JOINED, {
       roomId: dto.roomId,
-      playerId: human?.id ?? '',
-      players: this.maskedPlayers(managed, human?.id ?? ''),
+      playerId: humanId,
+      players: this.maskedPlayers(managed, humanId),
     });
     this.broadcastState(managed);
     // Rejoining after a disconnect: pick the game up where the server paused it.
-    if (human) this.resumeRoom(dto.roomId);
-    return this.ok<RoomAckData>({ roomId: dto.roomId, playerId: human?.id ?? '' });
+    this.resumeRoom(dto.roomId);
+    return this.ok<RoomAckData>({ roomId: dto.roomId, playerId: humanId });
   }
 
   @SubscribeMessage(GAME_EVENTS.LEAVE_ROOM)
   handleLeaveRoom(@ConnectedSocket() client: Socket, @MessageBody() data: { roomId: string; playerId: string }) {
-    const managed = this.rooms.get(data.roomId);
+    const managed = this.gameService.findSession(data.roomId);
     // Identity is decided by the server: only the player bound to this socket may leave as that player.
-    if (managed && managed.socketByPlayerId.get(data.playerId) !== client.id) {
-      client.leave(data.roomId);
-      return this.ok<RoomAckData>({ roomId: data.roomId, playerId: data.playerId });
-    }
-    if (managed) {
-      managed.socketByPlayerId.delete(data.playerId);
-      this.clearAiTimers(data.roomId);
+    if (managed && this.boundPlayerId(managed, client) === data.playerId) {
       // Single-player room: when the human leaves there is nobody left to play for.
-      if (data.playerId === managed.humanPlayerId) {
-        managed.finished = true;
-        this.rooms.delete(data.roomId);
-      }
+      this.gameService.deleteSession(data.roomId);
+      this.server.to(data.roomId).emit(GAME_EVENTS.PLAYER_LEFT, {
+        roomId: data.roomId,
+        playerId: data.playerId,
+      });
     }
-    this.gameService.leaveRoom(data.roomId, data.playerId);
     client.leave(data.roomId);
-    this.server.to(data.roomId).emit(GAME_EVENTS.PLAYER_LEFT, {
-      roomId: data.roomId,
-      playerId: data.playerId,
-    });
     return this.ok<RoomAckData>({ roomId: data.roomId, playerId: data.playerId });
   }
 
@@ -570,22 +514,24 @@ export class GameGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
   handleGetState(@ConnectedSocket() client: Socket, @MessageBody() data: { roomId: string }) {
     const managed = this.getManaged(data.roomId);
     // Mask for the player bound to this socket (a socket id is not a player id).
-    let forPlayerId = '';
-    for (const [playerId, socketId] of managed.socketByPlayerId) {
-      if (socketId === client.id) forPlayerId = playerId;
-    }
-    client.emit(GAME_EVENTS.STATE_SYNC, this.publicState(managed, forPlayerId));
+    client.emit(GAME_EVENTS.STATE_SYNC, this.publicState(managed, this.boundPlayerId(managed, client) ?? ''));
     return this.ok<RoomIdAckData>({ roomId: data.roomId });
   }
 
+  /** Idempotent: only the first call in READY deals; later calls (reload, re-render) change nothing. */
   @SubscribeMessage(GAME_EVENTS.START_GAME)
   @UsePipes(new ValidationPipe({ whitelist: true, transform: true }))
   handleStartGame(@ConnectedSocket() client: Socket, @MessageBody() data: { roomId: string }) {
     const managed = this.getManaged(data.roomId);
     const engine = managed.engine;
 
+    if (!this.boundPlayerId(managed, client)) {
+      throw new WsException({ code: 'INVALID_PLAYER', message: 'This socket is not bound to that room' });
+    }
+
     if (engine.state.phase !== 'READY') {
-      throw new WsException({ code: 'GAME_ALREADY_STARTED', message: 'Game already started' });
+      client.emit(GAME_EVENTS.STATE_SYNC, this.publicState(managed, managed.humanPlayerId));
+      return this.ok<StartGameAckData>({ roomId: data.roomId, alreadyStarted: true });
     }
 
     // The engine owns all phase transitions: READY -> DEALING -> BIDDING.
@@ -602,7 +548,7 @@ export class GameGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
     this.broadcastState(managed);
     this.scheduleAiTurn(data.roomId);
 
-    return this.ok<RoomIdAckData>({ roomId: data.roomId });
+    return this.ok<StartGameAckData>({ roomId: data.roomId, alreadyStarted: false });
   }
 
   @SubscribeMessage(GAME_EVENTS.PLACE_BID)
