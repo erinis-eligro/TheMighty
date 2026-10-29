@@ -3,6 +3,8 @@ default:
 
 backend-test:
   stage: test
+  tags:
+    - docker
   cache:
     key:
       files:
