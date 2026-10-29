@@ -88,6 +88,8 @@ export default function GamePage({ params }: { params: { roomId: string } }) {
     };
   }, [socket, isConnected, params.roomId, rejoinRoom, router]);
 
+  const me = players.find((p) => p.seat === 'bottom');
+  const aiPlayers = players.filter((p) => p.seat !== 'bottom');
   const owner = players.find((p) => p.id === ownerPlayerId);
   const friend = players.find((p) => p.id === friendPlayerId);
   // The giruda is final (shown in the header) once bidding is over; before that only the leading bid is known.
@@ -101,42 +103,42 @@ export default function GamePage({ params }: { params: { roomId: string } }) {
   }
 
   return (
-    <div className="min-h-screen bg-[#F7F5FA] p-4">
-      <header className="flex items-center justify-between mb-6 px-4 max-w-7xl mx-auto">
+    <div className="min-h-screen flex flex-col bg-pastel-bg p-2 md:p-4">
+      <header className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between mb-3 md:mb-6 px-2 md:px-4 w-full max-w-7xl mx-auto">
         <div className="flex items-center gap-3">
-          <div className="w-10 h-10 rounded-xl bg-[#8B5CF6] flex items-center justify-center text-white font-bold">M</div>
+          <div className="w-10 h-10 rounded-xl bg-pastel-accentHover flex items-center justify-center text-white font-bold">M</div>
           <div>
-            <h1 className="text-lg font-bold text-[#1F2937]">마이티</h1>
-            <p className="text-xs text-[#6B7280]">방 {roomId}</p>
+            <h1 className="text-lg font-bold text-pastel-text">마이티</h1>
+            <p className="text-xs text-pastel-muted">방 {roomId}</p>
           </div>
         </div>
-        <div className="flex items-center gap-4 text-sm">
-          <div className="bg-white px-3 py-1.5 rounded-lg shadow-sm border border-[#E5E7EB]">
-            <span className="text-[#6B7280] text-xs block">{bidFixed ? '비딩 점수' : '최고 비딩'}</span>
-            <span className="font-bold text-[#1F2937]">{highestBid ? `${highestBid.score}점` : '-'}</span>
+        <div className="flex flex-wrap items-center gap-2 md:gap-4 text-sm">
+          <div className="bg-white px-2 py-1 md:px-3 md:py-1.5 rounded-lg shadow-sm border border-pastel-border">
+            <span className="text-pastel-muted text-xs block">{bidFixed ? '비딩 점수' : '최고 비딩'}</span>
+            <span className="font-bold text-pastel-text">{highestBid ? `${highestBid.score}점` : '-'}</span>
           </div>
-          <div className="bg-white px-3 py-1.5 rounded-lg shadow-sm border border-[#E5E7EB]">
-            <span className="text-[#6B7280] text-xs block">기루다</span>
-            <span className="font-bold text-[#1F2937] text-lg leading-tight">
+          <div className="bg-white px-2 py-1 md:px-3 md:py-1.5 rounded-lg shadow-sm border border-pastel-border">
+            <span className="text-pastel-muted text-xs block">기루다</span>
+            <span className="font-bold text-pastel-text text-lg leading-tight">
               {shownGiruda ? <SuitIcon giruda={shownGiruda} /> : '-'}
             </span>
           </div>
           {owner && (
-            <div className="bg-white px-3 py-1.5 rounded-lg shadow-sm border border-[#E5E7EB]">
-              <span className="text-[#6B7280] text-xs block">주공</span>
-              <span className="font-bold text-[#1F2937]">{owner.username}</span>
+            <div className="bg-white px-2 py-1 md:px-3 md:py-1.5 rounded-lg shadow-sm border border-pastel-border">
+              <span className="text-pastel-muted text-xs block">주공</span>
+              <span className="font-bold text-pastel-text">{owner.username}</span>
             </div>
           )}
           {friendDeclaration && (
-            <div className="bg-white px-3 py-1.5 rounded-lg shadow-sm border border-[#E5E7EB]">
-              <span className="text-[#6B7280] text-xs block">프렌드</span>
-              <span className="font-bold text-[#1F2937]">
+            <div className="bg-white px-2 py-1 md:px-3 md:py-1.5 rounded-lg shadow-sm border border-pastel-border">
+              <span className="text-pastel-muted text-xs block">프렌드</span>
+              <span className="font-bold text-pastel-text">
                 {friend ? friend.username : friendRevealed ? '없음' : '비공개'}
-                <span className="ml-1 text-xs font-normal text-[#6B7280]">({friendText(friendDeclaration)})</span>
+                <span className="ml-1 text-xs font-normal text-pastel-muted">({friendText(friendDeclaration)})</span>
               </span>
             </div>
           )}
-          <span className={`px-3 py-1 rounded-full text-xs font-bold ${phase === 'BIDDING' ? 'bg-[#FEF3C7] text-[#92400E]' : phase === 'TRICK_PLAYING' ? 'bg-[#D1FAE5] text-[#047857]' : 'bg-[#E5E7EB] text-[#6B7280]'}`}>
+          <span className={`px-3 py-1 rounded-full text-xs font-bold ${phase === 'BIDDING' ? 'bg-pastel-warn text-pastel-warnText' : phase === 'TRICK_PLAYING' ? 'bg-pastel-ok text-pastel-okText' : 'bg-pastel-border text-pastel-muted'}`}>
             {PHASE_LABEL[phase]}
           </span>
         </div>
@@ -145,25 +147,35 @@ export default function GamePage({ params }: { params: { roomId: string } }) {
       {error && (
         <div
           role="alert"
-          className="fixed top-4 left-1/2 -translate-x-1/2 z-[60] max-w-[90vw] p-3 bg-[#FEE2E2] rounded-xl shadow-lg text-sm text-[#991B1B] flex items-center justify-between"
+          className="fixed top-4 left-1/2 -translate-x-1/2 z-[60] max-w-[90vw] p-3 bg-pastel-danger rounded-xl shadow-lg text-sm text-pastel-dangerText flex items-center justify-between"
         >
           <span>{error}</span>
           <button onClick={() => setError(null)} className="ml-4 font-bold" aria-label="닫기">×</button>
         </div>
       )}
 
-      <div className="max-w-7xl mx-auto relative h-[600px]">
-        {players.map((p: PlayerType) => (
-          <PlayerArea key={p.id} player={p} isCurrentTurn={p.id === turnPlayerId} />
-        ))}
-        <TrickBoard />
+      {/*
+        Mobile (portrait): a column - AI status row (4 across), trick board, my status bar.
+        md and up: one relative board; each PlayerArea is absolutely seated around the central trick board.
+      */}
+      <div className="flex-1 w-full max-w-7xl mx-auto flex flex-col gap-2 md:gap-0 md:relative md:block md:h-[30rem] md:flex-none">
+        <div className="grid grid-cols-4 gap-1 md:contents">
+          {aiPlayers.map((p: PlayerType) => (
+            <PlayerArea key={p.id} player={p} isCurrentTurn={p.id === turnPlayerId} />
+          ))}
+        </div>
+        {/* Nothing is on the table while bidding: on mobile the bidding panel takes the board's place. */}
+        <div className={phase === 'BIDDING' ? 'hidden md:contents' : 'contents'}>
+          <TrickBoard />
+        </div>
+        {me && <PlayerArea player={me} isCurrentTurn={me.id === turnPlayerId} />}
         {phase === 'BIDDING' && (
-          <div className="absolute inset-0 z-30 flex items-center justify-center pointer-events-none">
+          <div className="flex justify-center pointer-events-none md:absolute md:inset-0 md:z-30 md:items-center">
             <BiddingPanel />
           </div>
         )}
         {aiThinking && (
-          <div className="absolute top-2 left-1/2 -translate-x-1/2 z-20 bg-white/90 px-4 py-1.5 rounded-full shadow border border-[#E5E7EB] text-sm text-[#6B7280] animate-pulse whitespace-nowrap">
+          <div className="self-center z-20 bg-white/90 px-4 py-1.5 rounded-full shadow border border-pastel-border text-sm text-pastel-muted animate-pulse whitespace-nowrap md:absolute md:bottom-12 md:left-1/2 md:-translate-x-1/2">
             {turnPlayer?.username} 님이 진행 중...
           </div>
         )}
@@ -172,25 +184,27 @@ export default function GamePage({ params }: { params: { roomId: string } }) {
       <KittyExchangeModal />
       <FriendSelectionPanel />
 
-      <UserHand />
+      <div className="w-full max-w-7xl mx-auto">
+        <UserHand />
+      </div>
 
       {phase === 'GAME_OVER' && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm">
           <div className="bg-white rounded-2xl p-8 max-w-md text-center shadow-2xl">
-            <h2 className="text-2xl font-bold text-[#1F2937] mb-2">게임 종료</h2>
+            <h2 className="text-2xl font-bold text-pastel-text mb-2">게임 종료</h2>
             {result ? (
-              <p className="text-[#6B7280] mb-6">
+              <p className="text-pastel-muted mb-6">
                 {result.isWin ? '주공팀 승리' : '야당팀 승리'} (주공팀 {result.teamPoints} / 야당 {result.opponentPoints} / 비딩 {result.bidScore})
               </p>
             ) : (
-              <p className="text-[#6B7280] mb-6">결과를 확인하세요.</p>
+              <p className="text-pastel-muted mb-6">결과를 확인하세요.</p>
             )}
             <button
               onClick={() => {
                 leaveRoom();
                 router.push('/lobby');
               }}
-              className="w-full py-3 bg-[#8B5CF6] text-white rounded-xl font-semibold hover:bg-[#7C3AED] transition-colors"
+              className="w-full py-3 bg-pastel-accentHover text-white rounded-xl font-semibold hover:bg-pastel-accentDeep transition-colors"
             >
               로비로 돌아가기
             </button>

@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Card } from './Card';
 import { SuitIcon, SUIT_SYMBOL } from './SuitIcon';
 import { sortHand } from '@/lib/cards';
@@ -11,6 +11,19 @@ const TOTAL_TRICKS = 10;
 
 /** A card the player clicked that needs one more decision before it is sent. */
 type Pending = { card: CardType; kind: 'JOKER_SUIT' | 'JOKER_CALL' };
+
+/** Touch screens have no hover: a card is first raised by a tap and only sent by tapping it again. */
+function useCoarsePointer() {
+  const [coarse, setCoarse] = useState(false);
+  useEffect(() => {
+    const mq = window.matchMedia('(pointer: coarse)');
+    setCoarse(mq.matches);
+    const onChange = (e: MediaQueryListEvent) => setCoarse(e.matches);
+    mq.addEventListener('change', onChange);
+    return () => mq.removeEventListener('change', onChange);
+  }, []);
+  return coarse;
+}
 
 export function UserHand() {
   const phase = useGameStore((s) => s.phase);
@@ -26,6 +39,14 @@ export function UserHand() {
   const currentTrick = useGameStore((s) => s.currentTrick);
   const currentTrickNumber = useGameStore((s) => s.currentTrickNumber);
   const [pending, setPending] = useState<Pending | null>(null);
+  const [armedId, setArmedId] = useState<string | null>(null);
+  const coarse = useCoarsePointer();
+  const isMyTurnNow = phase === 'TRICK_PLAYING' && isMyTurn;
+
+  // The raised card is only valid while it is still my turn to play; drop it otherwise.
+  useEffect(() => {
+    if (!isMyTurnNow) setArmedId(null);
+  }, [isMyTurnNow]);
 
   if (!player) return null;
 
@@ -43,6 +64,12 @@ export function UserHand() {
   const handleSelect = (cardId: string) => {
     const card = player.hand.find((c) => c.id === cardId);
     if (!card) return;
+    if (coarse && armedId !== cardId) {
+      setPending(null);
+      setArmedId(cardId);
+      return;
+    }
+    setArmedId(null);
     // The server validates everything; these prompts only collect the extra choices of a leader.
     if (isLeading && card.isJoker && currentTrickNumber !== TOTAL_TRICKS) {
       setPending({ card, kind: 'JOKER_SUIT' });
@@ -74,7 +101,7 @@ export function UserHand() {
         <div
           role="dialog"
           aria-label={pending.kind === 'JOKER_SUIT' ? '조커 무늬 선택' : '조커콜 선언'}
-          className="absolute bottom-44 left-1/2 -translate-x-1/2 z-40 bg-white rounded-2xl shadow-xl border border-pastel-border p-4 flex flex-col items-center gap-3"
+          className="absolute bottom-full mb-2 left-1/2 -translate-x-1/2 z-40 bg-white rounded-2xl shadow-xl border border-pastel-border p-4 flex flex-col items-center gap-3"
         >
           {pending.kind === 'JOKER_SUIT' ? (
             <>
@@ -84,7 +111,7 @@ export function UserHand() {
                   <button
                     key={suit}
                     onClick={() => void send(pending.card.id, { jokerLeadSuit: suit })}
-                    className="w-12 h-12 rounded-xl bg-pastel-bg hover:bg-pastel-accent/30 text-2xl border border-pastel-border"
+                    className="w-11 h-11 md:w-12 md:h-12 rounded-xl bg-pastel-bg hover:bg-pastel-accent/30 text-2xl border border-pastel-border"
                   >
                     <SuitIcon giruda={suit} />
                   </button>
@@ -117,20 +144,33 @@ export function UserHand() {
           </button>
         </div>
       )}
-      <div className="relative w-full h-40 flex items-end justify-center gap-1 px-4 pb-6">
-        {hand.map((card: CardType) => {
-          const playable = !card.hidden && playableCardIds.includes(card.id);
-          return (
-            <Card
-              key={card.id}
-              card={card}
-              selectable={myPlay && playable}
-              dimmed={myPlay && !playable}
-              onBlockedSelect={trickPlaying ? handleBlocked : undefined}
-              onSelect={handleSelect}
-            />
-          );
-        })}
+      {/*
+        Mobile: cards overlap like a fan and the row scrolls sideways when it still does not fit.
+        md and up: a centred, loosely overlapping row.
+      */}
+      <div className="w-full overflow-x-auto overscroll-x-contain snap-x snap-mandatory px-2 pt-6 pb-3 md:px-4 md:pt-8 md:pb-6">
+        <div className="mx-auto flex w-max items-end">
+          {hand.map((card: CardType) => {
+            const playable = !card.hidden && playableCardIds.includes(card.id);
+            return (
+              <div
+                key={card.id}
+                className={`snap-center -ml-fan-overlap md:-ml-fan-overlap-md lg:-ml-fan-overlap-lg first:ml-0 hover:z-10 ${
+                  armedId === card.id ? 'z-10 -translate-y-3' : ''
+                } transition-transform`}
+              >
+                <Card
+                  card={card}
+                  selectable={myPlay && playable}
+                  dimmed={myPlay && !playable}
+                  selected={armedId === card.id}
+                  onBlockedSelect={trickPlaying ? handleBlocked : undefined}
+                  onSelect={handleSelect}
+                />
+              </div>
+            );
+          })}
+        </div>
       </div>
     </div>
   );
