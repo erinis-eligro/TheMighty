@@ -1,4 +1,5 @@
 import { SeatPosition } from '../constants';
+import type { GameEngine } from '../core/game-engine';
 
 export interface Card {
   suit: 'SPADE' | 'DIAMOND' | 'HEART' | 'CLUB' | 'JOKER';
@@ -139,10 +140,28 @@ export interface GameState {
   result?: RoundResult | null;
 }
 
-export interface Room {
+/**
+ * One single-player game session (1 human + 4 AI). Owned by GameService; the gateway only
+ * talks to the client and drives the timers stored here.
+ */
+export interface GameSession {
   id: string;
-  hostId: string;
-  players: Map<string, Player>;
-  gameState: GameState | null;
+  engine: GameEngine;
+  humanPlayerId: string;
+  /** Nickname of the human; used for the stats record. */
+  username: string;
+  /** Secret handed out only to the creating socket; required to rebind a new socket (rejoin). */
+  rejoinToken: string;
+  /** Socket currently bound to the human seat; undefined while disconnected. */
+  humanSocketId?: string;
+  aiTimers: Map<string, NodeJS.Timeout>;
+  /** True once game_end was sent and the result was persisted (guards against double saves). */
+  finished?: boolean;
+  /** Fires after TRICK_RESOLVED_DELAY_MS to start the next trick / finish the game. */
+  resolveTimer?: NodeJS.Timeout;
+  /** Consecutive failed AI steps; the driver gives up after MAX_AI_FAILURES instead of looping on an error. */
+  aiFailures?: number;
+  /** Deletes the session if the human does not come back within SESSION_TTL_MS after a disconnect. */
+  expiryTimer?: NodeJS.Timeout;
   createdAt: Date;
 }

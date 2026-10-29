@@ -3,7 +3,8 @@
 import { useEffect } from 'react';
 import { useGameStore } from '@/store/useGameStore';
 import { emitWithAck } from '@/lib/socket';
-import type { RoomAckData } from '@/types/protocol';
+import { clearSession, loadSession, saveSession } from '@/lib/session';
+import type { CreateRoomAckData, RoomAckData } from '@/types/protocol';
 
 export default function LobbyPage() {
   const { socket, isConnected } = useGameStore();
@@ -28,10 +29,11 @@ export default function LobbyPage() {
             onClick={async () => {
               const name = prompt('닉네임을 입력하세요') || '플레이어';
               if (!socket) return;
-              const res = await emitWithAck<RoomAckData>(socket, 'create_room', { username: name });
+              const res = await emitWithAck<CreateRoomAckData>(socket, 'create_room', { username: name });
               if (res.ok) {
                 store.setError(null);
                 store.setRoom(res.data.roomId, res.data.playerId, name);
+                saveSession({ ...res.data, username: name });
               } else {
                 store.setError(res.error.message);
               }
@@ -43,21 +45,25 @@ export default function LobbyPage() {
           </button>
           <button
             onClick={async () => {
-              const room = prompt('방 코드를 입력하세요');
-              const name = prompt('닉네임을 입력하세요') || '플레이어';
-              if (!socket || !room) return;
-              const res = await emitWithAck<RoomAckData>(socket, 'join_room', { roomId: room, username: name });
+              // Single-player: join_room is a rejoin of the session this tab created.
+              const saved = loadSession();
+              if (!socket || !saved) return;
+              const res = await emitWithAck<RoomAckData>(socket, 'join_room', {
+                roomId: saved.roomId,
+                rejoinToken: saved.rejoinToken,
+              });
               if (res.ok) {
                 store.setError(null);
-                store.setRoom(res.data.roomId, res.data.playerId, name);
+                store.setRoom(res.data.roomId, res.data.playerId, saved.username);
               } else {
+                clearSession();
                 store.setError(res.error.message);
               }
             }}
             disabled={!isConnected}
             className="w-full py-4 bg-white text-[#8B5CF6] border-2 border-[#8B5CF6] rounded-xl font-semibold hover:bg-[#8B5CF6]/10 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
           >
-            방에 입장하기
+            이어하기 (재접속)
           </button>
         </div>
 

@@ -3,7 +3,8 @@
 import { motion } from 'framer-motion';
 import { useGameStore } from '@/store/useGameStore';
 import { emitWithAck } from '@/lib/socket';
-import type { RoomAckData } from '@/types/protocol';
+import { clearSession, loadSession, saveSession } from '@/lib/session';
+import type { CreateRoomAckData, RoomAckData } from '@/types/protocol';
 
 export function Lobby() {
   const { roomId, playerId, username, isConnected, error, setRoom, setError } = useGameStore();
@@ -12,24 +13,29 @@ export function Lobby() {
   const createRoom = async () => {
     const name = prompt('닉네임을 입력하세요') || '플레이어';
     if (!socket) return;
-    const res = await emitWithAck<RoomAckData>(socket, 'create_room', { username: name });
+    const res = await emitWithAck<CreateRoomAckData>(socket, 'create_room', { username: name });
     if (res.ok) {
       setError(null);
       setRoom(res.data.roomId, res.data.playerId, name);
+      saveSession({ ...res.data, username: name });
     } else {
       setError(res.error.message);
     }
   };
 
   const joinRoom = async () => {
-    const room = prompt('방 코드를 입력하세요');
-    const name = prompt('닉네임을 입력하세요') || '플레이어';
-    if (!socket || !room) return;
-    const res = await emitWithAck<RoomAckData>(socket, 'join_room', { roomId: room, username: name });
+    // Single-player: join_room is a rejoin of the session this tab created.
+    const saved = loadSession();
+    if (!socket || !saved) return;
+    const res = await emitWithAck<RoomAckData>(socket, 'join_room', {
+      roomId: saved.roomId,
+      rejoinToken: saved.rejoinToken,
+    });
     if (res.ok) {
       setError(null);
-      setRoom(res.data.roomId, res.data.playerId, name);
+      setRoom(res.data.roomId, res.data.playerId, saved.username);
     } else {
+      clearSession();
       setError(res.error.message);
     }
   };
@@ -57,7 +63,7 @@ export function Lobby() {
             disabled={!isConnected}
             className="w-full py-4 bg-white text-[#8B5CF6] border-2 border-[#8B5CF6] rounded-xl font-semibold hover:bg-[#8B5CF6]/10 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
           >
-            방에 입장하기
+            이어하기 (재접속)
           </button>
         </div>
 

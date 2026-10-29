@@ -35,10 +35,18 @@ export interface RoomAckData {
   roomId: string;
   playerId: string;
 }
+/**
+ * Ack of create_room. `rejoinToken` is a secret for this session only: keep it (e.g. in
+ * sessionStorage) and present it to `join_room` to take the seat back after a reload/reconnect.
+ */
+export interface CreateRoomAckData extends RoomAckData {
+  rejoinToken: string;
+}
 
+/** Single-player rejoin: binds the new socket to the session's human seat. */
 export interface JoinRoomRequest {
   roomId: string;
-  username: string;
+  rejoinToken: string;
 }
 
 export interface LeaveRoomRequest {
@@ -55,6 +63,10 @@ export interface RoomIdAckData {
 
 export interface StartGameRequest {
   roomId: string;
+}
+/** start_game is idempotent: `alreadyStarted` is true when the game was already dealt. */
+export interface StartGameAckData extends RoomIdAckData {
+  alreadyStarted: boolean;
 }
 
 export interface PlaceBidRequest {
@@ -103,11 +115,11 @@ export interface PlayCardRequest {
 type AckFn<T> = (res: Ack<T>) => void;
 
 export interface ClientToServerEvents {
-  create_room: (payload: CreateRoomRequest, ack?: AckFn<RoomAckData>) => void;
+  create_room: (payload: CreateRoomRequest, ack?: AckFn<CreateRoomAckData>) => void;
   join_room: (payload: JoinRoomRequest, ack?: AckFn<RoomAckData>) => void;
   leave_room: (payload: LeaveRoomRequest, ack?: AckFn<RoomAckData>) => void;
   get_state: (payload: GetStateRequest, ack?: AckFn<RoomIdAckData>) => void;
-  start_game: (payload: StartGameRequest, ack?: AckFn<RoomIdAckData>) => void;
+  start_game: (payload: StartGameRequest, ack?: AckFn<StartGameAckData>) => void;
   place_bid: (payload: PlaceBidRequest, ack?: AckFn<RoomAckData>) => void;
   exchange_kitty: (payload: ExchangeKittyRequest, ack?: AckFn<RoomAckData>) => void;
   declare_friend: (payload: DeclareFriendRequest, ack?: AckFn<RoomAckData>) => void;
