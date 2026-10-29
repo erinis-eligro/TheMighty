@@ -42,5 +42,15 @@ docker compose down -v
 - 스키마를 변경하면 `cd backend && npx prisma migrate dev --name <name>` 으로 마이그레이션을 만들어 `backend/prisma/migrations` 에 함께 커밋하세요.
 
 ## 환경변수
-- `CORS_ORIGIN` (backend): 허용할 프론트엔드 origin. 쉼표로 여러 개 지정 가능, `*` 는 전체 허용. 기본값 `http://localhost:3000`.
-- `NEXT_PUBLIC_BACKEND_URL` (frontend): 백엔드 주소. 소켓은 이 주소의 `/game` 네임스페이스로 연결합니다.
+- `NEXT_PUBLIC_BACKEND_URL` (frontend, **빌드 인자**): 브라우저가 접근할 수 있는 백엔드 주소 (예: `https://api.example.com`). Next.js 가 클라이언트 번들에 빌드 시점에 인라인하므로 런타임 `environment` 로는 바꿀 수 없고, 변경 시 프론트 이미지를 다시 빌드해야 합니다. 소켓(`/game`)과 전적 REST(`/stats/*`) 모두 이 주소를 사용합니다. 기본값 `http://localhost:3001`. `backend` 같은 컨테이너 호스트명은 브라우저가 해석할 수 없으므로 사용하지 마세요.
+- `CORS_ORIGIN` (backend): 허용할 프론트엔드 origin. 쉼표로 여러 개 지정 가능, `*` 는 전체 허용. 기본값 `http://localhost:3000`. **프론트엔드에 접속하는 origin 과 반드시 일치**해야 합니다.
+- `NODE_TLS_REJECT_UNAUTHORIZED` (backend, 빌드 인자): 사내 프록시 SSL 오류로 `prisma generate` 가 실패할 때만 `0` 으로 지정합니다. 기본값 `1` (검증 유지).
+
+`NEXT_PUBLIC_BACKEND_URL` 과 `CORS_ORIGIN` 은 함께 맞춰야 합니다. 루트의 `.env` 파일이나 셸 환경변수로 지정하면 `docker-compose.yml` 이 읽어갑니다.
+
+```powershell
+# 예: 다른 PC/도메인에서 접속하는 경우
+$env:NEXT_PUBLIC_BACKEND_URL="http://192.168.0.10:3001"
+$env:CORS_ORIGIN="http://192.168.0.10:3000"
+docker compose up -d --build
+```

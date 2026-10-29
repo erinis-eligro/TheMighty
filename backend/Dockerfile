@@ -1,14 +1,7 @@
 # syntax=docker/dockerfile:1
 FROM node:20-alpine AS base
 
-# 1. 의존성 설치 (캐시 레이어 분리용)
-FROM base AS deps
-RUN apk add --no-cache libc6-compat openssl ca-certificates && update-ca-certificates
-WORKDIR /app
-COPY backend/package.json backend/package-lock.json* ./
-RUN npm ci --omit=dev
-
-# 2. 소스 빌드 & Prisma 바이너리 생성
+# 1. 소스 빌드 & Prisma 바이너리 생성
 FROM base AS builder
 RUN apk add --no-cache libc6-compat openssl ca-certificates python3 make g++ && update-ca-certificates
 WORKDIR /app
@@ -17,13 +10,14 @@ RUN npm ci
 COPY backend/prisma ./prisma
 ENV PRISMA_CLI_BINARY_FETCH=true
 
-# 사내 프록시 SSL 검증 오류 우회
-RUN NODE_TLS_REJECT_UNAUTHORIZED=0 npx prisma generate
+# 사내 프록시 SSL 검증 오류가 있을 때만 `--build-arg NODE_TLS_REJECT_UNAUTHORIZED=0` 으로 우회한다. (기본: 검증 유지)
+ARG NODE_TLS_REJECT_UNAUTHORIZED=1
+RUN NODE_TLS_REJECT_UNAUTHORIZED=${NODE_TLS_REJECT_UNAUTHORIZED} npx prisma generate
 
 COPY backend/ ./
 RUN npm run build
 
-# 3. 실제 컨테이너 구동 런타임 이미지
+# 2. 실제 컨테이너 구동 런타임 이미지
 FROM base AS runner
 RUN apk add --no-cache openssl ca-certificates && update-ca-certificates
 WORKDIR /app

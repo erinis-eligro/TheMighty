@@ -22,6 +22,8 @@ services:
     build:
       context: .
       dockerfile: backend/Dockerfile
+      args:
+        NODE_TLS_REJECT_UNAUTHORIZED: ${NODE_TLS_REJECT_UNAUTHORIZED:-1}
     container_name: mighty-backend
     depends_on:
       postgres:
@@ -29,7 +31,7 @@ services:
     environment:
       DATABASE_URL: "postgresql://postgres:postgres@postgres:5432/mighty?schema=public"
       PORT: 3001
-      CORS_ORIGIN: "http://localhost:3000"
+      CORS_ORIGIN: "${CORS_ORIGIN:-http://localhost:3000}"
       PRISMA_LOG: "true"
     ports:
       - "3001:3001"
@@ -39,12 +41,14 @@ services:
     build:
       context: .
       dockerfile: frontend/Dockerfile
+      args:
+        # 브라우저에서 접근 가능한 백엔드 주소. 빌드 시점에 번들에 고정된다.
+        NEXT_PUBLIC_BACKEND_URL: ${NEXT_PUBLIC_BACKEND_URL:-http://localhost:3001}
     container_name: mighty-frontend
     depends_on:
       backend:
         condition: service_started
     environment:
-      NEXT_PUBLIC_BACKEND_URL: http://backend:3001
       PORT: 3000
     ports:
       - "3000:3000"
