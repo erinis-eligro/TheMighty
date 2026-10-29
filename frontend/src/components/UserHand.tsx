@@ -148,7 +148,10 @@ export function UserHand() {
         Mobile: cards overlap like a fan and the row scrolls sideways when it still does not fit.
         md and up: a centred, loosely overlapping row.
       */}
-      <div className="w-full overflow-x-auto overscroll-x-contain snap-x snap-mandatory px-2 pt-6 pb-3 md:px-4 md:pt-8 md:pb-6">
+      <div
+        data-testid="user-hand"
+        className="w-full overflow-x-auto overscroll-x-contain snap-x snap-mandatory px-2 pt-6 pb-3 md:px-4 md:pt-8 md:pb-6"
+      >
         <div className="mx-auto flex w-max items-end">
           {hand.map((card: CardType) => {
             const playable = !card.hidden && playableCardIds.includes(card.id);

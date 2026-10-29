@@ -33,6 +33,10 @@ services:
       PORT: 3001
       CORS_ORIGIN: "${CORS_ORIGIN:-http://localhost:3000}"
       PRISMA_LOG: "true"
+      # 비워두면 기본 지연(AI 1~1.5s, 트릭 1.5s)을 쓴다. E2E/스모크에서만 줄여서 넘긴다.
+      AI_TURN_DELAY_MIN_MS: "${AI_TURN_DELAY_MIN_MS:-}"
+      AI_TURN_DELAY_MAX_MS: "${AI_TURN_DELAY_MAX_MS:-}"
+      TRICK_RESOLVED_DELAY_MS: "${TRICK_RESOLVED_DELAY_MS:-}"
     ports:
       - "3001:3001"
     restart: unless-stopped

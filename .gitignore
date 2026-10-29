@@ -55,3 +55,7 @@ tsconfig.tsbuildinfo
 *.tsbuildinfo
 .eslintcache
 .stylelintcache
+
+# Playwright
+frontend/test-results/
+frontend/playwright-report/
