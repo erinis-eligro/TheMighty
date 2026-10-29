@@ -1,4 +1,3 @@
-import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { GameEngine } from './game-engine';
 import { validatePlay } from './trick';
@@ -31,7 +30,7 @@ const card = (suit: Card['suit'], rank: Card['rank']): Card => ({
  * p2 is president (giruda HEART) and the engine is in TRICK_PLAYING for trick 1.
  * Hands are replaced with deterministic ones: every player holds 10 cards.
  */
-function playingEngine(declaration: Parameters<GameEngine['selectFriend']>[0] = { type: 'NO_FRIEND' }): GameEngine {
+function playingEngine(declaration: Parameters<GameEngine['declareFriend']>[1] = { type: 'NO_FRIEND' }): GameEngine {
   const engine = new GameEngine({ players: makePlayers(), giruda: 'NO_GIRUDA' });
   engine.deal();
   engine.placeBid('p0', { pass: true });
@@ -41,7 +40,7 @@ function playingEngine(declaration: Parameters<GameEngine['selectFriend']>[0] = 
   engine.placeBid('p4', { pass: true });
   const ids = [...engine.state.players[2].hand, ...engine.state.kitty].slice(0, 3).map((c) => c.id);
   engine.exchangeKitty('p2', { discardCardIds: ids });
-  engine.selectFriend(declaration);
+  engine.declareFriend('p2', declaration);
   return engine;
 }
 
@@ -208,7 +207,7 @@ test('giruda lead restriction only applies to the president leading, not to foll
   const base = {
     card: card('HEART', 'A'),
     hand: [card('HEART', 'A'), card('CLUB', '4')],
-    turnNumber: 1,
+    trickNumber: 1,
     totalTricks: 10,
     giruda: 'HEART',
   };

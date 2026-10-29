@@ -1,8 +1,8 @@
-import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { GameEngine } from './game-engine';
 import { validateFriendDeclaration, resolveFriendTargetCard } from './friend';
 import { selectFriendDeclaration } from './ai';
+import { scoreRound } from './score';
 import { Card, Player } from '../entities/game.entity';
 
 function makePlayers(): Player[] {
@@ -180,32 +180,37 @@ test('first-trick friend: the president winning trick 1 means no friend', () => 
 });
 
 test('scoring: a hidden friend already counts for the president team; no friend means the president alone', () => {
-  // Friend p4 holds the declared HEART A; the president p0 plays HEART 10 (p4 gets nothing) and p4 wins with HEART A.
-  const friendEngine = friendPhaseEngine(
-    hands({ 0: [card('HEART', '10', 'h10')], 4: [card('HEART', 'A', 'ha')] })
-  );
-  friendEngine.declareFriend('p0', { type: 'CARD', suit: 'HEART', rank: 'A' });
-  friendEngine.playCard('p0', 'h10');
-  friendEngine.playCard('p1', 'f1-0');
-  // p2 is void in HEART, so any card is legal.
-  friendEngine.playCard('p2', 'f2-0');
-  friendEngine.playCard('p3', 'f3-0');
-  const r = friendEngine.playCard('p4', 'ha');
-  assert.equal(r.trick?.winnerPlayerId, 'p4');
-  assert.equal(r.points, 2); // HEART 10 + HEART A
-  assert.equal((friendEngine as any).teamPoints, 2);
+  // Friend p4 holds the declared HEART A (giruda). The president p0 leads DIAMOND 10 and p4 wins with HEART A.
+  const playTrick = (declaration: { type: string; suit?: string; rank?: string }) => {
+    const engine = friendPhaseEngine(hands({ 0: [card('DIAMOND', '10', 'd10')], 4: [card('HEART', 'A', 'ha')] }));
+    engine.declareFriend('p0', declaration);
+    engine.playCard('p0', 'd10');
+    engine.playCard('p1', 'f1-0');
+    // p2, p3 and p4 are void in DIAMOND, so any card is legal.
+    engine.playCard('p2', 'f2-0');
+    engine.playCard('p3', 'f3-0');
+    const r = engine.playCard('p4', 'ha');
+    assert.equal(r.trick?.winnerPlayerId, 'p4');
+    assert.equal(r.points, 2); // DIAMOND 10 + HEART A
+    return scoreRound({
+      players: engine.state.players,
+      ownerPlayerId: engine.state.ownerPlayerId,
+      friendPlayerId: engine.state.friendPlayerId,
+      bidScore: 13,
+      giruda: 'HEART',
+    });
+  };
+
+  const withFriend = playTrick({ type: 'CARD', suit: 'HEART', rank: 'A' });
+  assert.equal(withFriend.friendPlayerId, 'p4');
+  assert.equal(withFriend.teamPoints, 2);
+  assert.equal(withFriend.opponentPoints, 0);
 
   // Same trick with NO_FRIEND: p4's win does not count for the president.
-  const soloEngine = friendPhaseEngine(
-    hands({ 0: [card('HEART', '10', 'h10')], 4: [card('HEART', 'A', 'ha')] })
-  );
-  soloEngine.declareFriend('p0', { type: 'NO_FRIEND' });
-  soloEngine.playCard('p0', 'h10');
-  soloEngine.playCard('p1', 'f1-0');
-  soloEngine.playCard('p2', 'f2-0');
-  soloEngine.playCard('p3', 'f3-0');
-  soloEngine.playCard('p4', 'ha');
-  assert.equal((soloEngine as any).teamPoints, 0);
+  const solo = playTrick({ type: 'NO_FRIEND' });
+  assert.equal(solo.friendPlayerId, null);
+  assert.equal(solo.teamPoints, 0);
+  assert.equal(solo.opponentPoints, 2);
 });
 
 test('selectFriendDeclaration picks a card the AI president does not hold', () => {

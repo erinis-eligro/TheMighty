@@ -1,4 +1,3 @@
-import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { Card, Player } from '../entities/game.entity';
 import { GameEngine } from './game-engine';
@@ -205,7 +204,9 @@ test('engine: declaring the joker call weakens the joker in that trick (state + 
   engine.playCard('p3', hands[3][0].id);
   const r = engine.playCard('p4', hands[4][0].id);
   assert.equal(r.trick?.winnerPlayerId, 'p4', 'club 6 wins; the powerless joker does not');
-  assert.equal(engine.state.isJokerCallActive, false, 'reset after the trick');
+  assert.equal(engine.state.isJokerCallActive, true, 'still shown while the trick is resolved');
+  engine.advanceAfterTrick();
+  assert.equal(engine.state.isJokerCallActive, false, 'reset once the next trick starts');
 });
 
 test('engine: without a joker call the joker wins the trick', () => {
@@ -306,7 +307,12 @@ test('AI self-play: full games always finish with legal plays', () => {
     exchangeAndDeclareNoFriend(engine);
 
     let guard = 0;
-    while (engine.state.phase === 'TRICK_PLAYING' && guard++ < 100) {
+    while (engine.state.phase === 'TRICK_PLAYING' || engine.state.phase === 'TRICK_RESOLVED') {
+      assert.ok(guard++ < 100, 'game does not finish');
+      if (engine.state.phase === 'TRICK_RESOLVED') {
+        engine.advanceAfterTrick();
+        continue;
+      }
       const turn = engine.state.players[engine.state.currentTurnIndex];
       const plays = engine.state.currentTrick?.cards ?? [];
       const d = selectCardToPlay({
@@ -319,6 +325,7 @@ test('AI self-play: full games always finish with legal plays', () => {
         isPartnerWinningCurrentTrick: false,
         mightyCard: engine.mightyCard,
         jokerCallCard: engine.jokerCallCard,
+        restrictGirudaLead: engine.restrictsGirudaLead(),
         isJokerCallActive: engine.state.isJokerCallActive,
       });
       engine.playCard(turn.id, d.cardId, { jokerCall: d.jokerCall, jokerLeadSuit: d.jokerLeadSuit });
