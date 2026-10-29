@@ -1,7 +1,9 @@
 'use client';
 
 import { motion } from 'framer-motion';
-import { type Player as PlayerType } from '@/store/useGameStore';
+import { SUIT_SYMBOL } from './SuitIcon';
+import { sortHand } from '@/lib/cards';
+import { useGameStore, type Player as PlayerType } from '@/store/useGameStore';
 
 type PlayerAreaProps = {
   player: PlayerType;
@@ -16,6 +18,7 @@ const SEAT_POSITION: Record<string, { top?: string; left?: string; right?: strin
 };
 
 export function PlayerArea({ player, isCurrentTurn }: PlayerAreaProps) {
+  const giruda = useGameStore((st) => st.giruda);
   const pos = SEAT_POSITION[player.seat];
   const style: React.CSSProperties = { position: 'absolute', ...pos };
 
@@ -31,7 +34,22 @@ export function PlayerArea({ player, isCurrentTurn }: PlayerAreaProps) {
         {player.isAi && <span className="text-[10px] bg-[#8B5CF6] text-white px-1.5 rounded">AI</span>}
         <span className="text-xs font-bold">{player.handCount}</span>
       </div>
-      <div className="text-xs text-[#6B7280]">{player.score}점</div>
+      <div className="text-xs text-pastel-muted">{player.score}점</div>
+      {player.collectedScoreCards.length > 0 && (
+        <div className="flex flex-wrap justify-center gap-0.5 max-w-[150px]" aria-label="획득한 점수 카드">
+          {sortHand(player.collectedScoreCards, giruda).map((c) => (
+            <span
+              key={c.id}
+              className={`text-[10px] font-bold bg-white rounded px-1 border border-pastel-border ${
+                c.suit === 'DIAMOND' || c.suit === 'HEART' ? 'text-suit-red' : 'text-suit-black'
+              }`}
+            >
+              {SUIT_SYMBOL[c.suit]}
+              {c.rank}
+            </span>
+          ))}
+        </div>
+      )}
       <div className="flex gap-1">
         {player.isOwner && (
           <span className="text-[10px] bg-pastel-warn text-pastel-warnText font-bold px-2 py-0.5 rounded-full">주공</span>

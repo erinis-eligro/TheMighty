@@ -261,6 +261,15 @@ describe('Information hiding and identity', () => {
     assert.ok(ids.every((id) => hand.some((c: any) => c.id === id)));
     assert.deepEqual((gateway as any).publicState(managed, 'ai-0').playableCardIds, []);
   });
+
+  test('state_sync carries the joker call card for the current giruda', () => {
+    const { gateway, managed, playerId } = startHumanGame();
+    const engine = managed.engine;
+    engine.deal();
+    const sync = (gateway as any).publicState(managed, playerId);
+    assert.deepEqual(sync.jokerCallCard, engine.jokerCallCard);
+    assert.deepEqual(sync.jokerCallCard, { suit: 'CLUB', rank: '3' });
+  });
 });
 
 describe('Session lifecycle', () => {

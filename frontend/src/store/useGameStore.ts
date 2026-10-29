@@ -8,6 +8,7 @@ import type {
   ExchangeKittyRequest,
   GameErrorPayload,
   PlaceBidRequest,
+  PlayCardRequest,
   RoomAckData,
 } from '@/types/protocol';
 
@@ -95,7 +96,7 @@ export type RoundResult = {
 type SyncedState = Pick<
   GameState,
   | 'roomId' | 'phase' | 'currentTurnIndex' | 'turnPlayerId' | 'players' | 'currentTrick' | 'trickHistory'
-  | 'currentTrickNumber' | 'leadSuit' | 'isJokerCallActive' | 'kitty' | 'giruda' | 'ownerPlayerId'
+  | 'currentTrickNumber' | 'leadSuit' | 'isJokerCallActive' | 'jokerCallCard' | 'kitty' | 'giruda' | 'ownerPlayerId'
   | 'presidentIndex' | 'friendDeclaration' | 'friendIndex' | 'friendPlayerId' | 'friendRevealed'
   | 'passCount' | 'currentBid' | 'highestBid' | 'bidLeader' | 'playableCardIds' | 'result'
 >;
@@ -116,6 +117,8 @@ interface GameState {
   currentTrickNumber: number;
   leadSuit: Suit | null;
   isJokerCallActive: boolean;
+  /** The card that calls the joker for the current giruda (public rule info). */
+  jokerCallCard: { suit: Card['suit']; rank: Card['rank'] } | null;
   kitty: Card[];
   giruda: string;
   ownerPlayerId: string;
@@ -154,6 +157,8 @@ interface GameState {
   placeBid: (action: Pick<PlaceBidRequest, 'bid' | 'giruda' | 'pass'>) => Promise<boolean>;
   exchangeKitty: (action: Pick<ExchangeKittyRequest, 'discardCardIds' | 'giruda' | 'bidScore'>) => Promise<boolean>;
   declareFriend: (action: Pick<DeclareFriendRequest, 'type' | 'suit' | 'rank'>) => Promise<boolean>;
+  /** Asks the server to play a card; the server validates it and answers with a state_sync. */
+  playCard: (action: Pick<PlayCardRequest, 'cardId' | 'jokerCall' | 'jokerLeadSuit'>) => Promise<boolean>;
   setRoom: (roomId: string, playerId: string, username: string) => void;
   setError: (error: string | null) => void;
   reset: () => void;
@@ -187,6 +192,7 @@ export const useGameStore = create<GameState>((set, get) => ({
   currentTrickNumber: 0,
   leadSuit: null,
   isJokerCallActive: false,
+  jokerCallCard: null,
   kitty: [],
   giruda: 'NO_GIRUDA',
   ownerPlayerId: '',
@@ -224,6 +230,7 @@ export const useGameStore = create<GameState>((set, get) => ({
         ...data,
         friendRevealed: data.friendRevealed ?? false,
         playableCardIds: data.playableCardIds ?? [],
+        jokerCallCard: data.jokerCallCard ?? null,
         result: data.result ?? null,
       }),
     );
@@ -282,11 +289,12 @@ export const useGameStore = create<GameState>((set, get) => ({
   placeBid: (action) => sendAction(get, set, 'place_bid', action),
   exchangeKitty: (action) => sendAction(get, set, 'exchange_kitty', action),
   declareFriend: (action) => sendAction(get, set, 'declare_friend', action),
+  playCard: (action) => sendAction(get, set, 'play_card', action),
   setRoom: (roomId, playerId, username) => set({ roomId, playerId, username }),
   setError: (error) => set({ error }),
   reset: () => set({
     phase: 'READY', players: [], currentTrick: null, trickHistory: [], currentTrickNumber: 0,
-    currentTurnIndex: 0, turnPlayerId: '', leadSuit: null, isJokerCallActive: false, kitty: [],
+    currentTurnIndex: 0, turnPlayerId: '', leadSuit: null, isJokerCallActive: false, jokerCallCard: null, kitty: [],
     presidentIndex: null, friendDeclaration: null, friendIndex: null, friendPlayerId: undefined, friendRevealed: false,
     passCount: 0, currentBid: 0, highestBid: null, bidLeader: undefined, playableCardIds: [], result: null, error: null,
   }),
