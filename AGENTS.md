@@ -99,6 +99,7 @@ docker compose up -d --build
 - 백엔드 enum/타입 변경 시 `frontend/src/store/useGameStore.ts` 의 타입도 함께 수정한다. (무늬는 백엔드/Prisma 모두 `CLUB` 을 사용하며, 명세 문서의 `CLOVER` 와 다르므로 `CLUB` 으로 통일한다.)
 - UI 는 밝은 파스텔톤의 캐주얼 보드게임 스타일, 둥근 모서리(rounded). 어두운 카지노 느낌은 피한다. 색상은 하드코딩 hex 대신 가능하면 `tailwind.config.js` 토큰을 사용한다.
 - 반응형: PC 는 중앙 트릭 보드 + 하단 유저 덱, 모바일은 세로 화면 기준으로 상단 AI 4명 + 하단 손패(부채꼴/스와이프).
+- 턴 순서는 화면 기준 시계 방향이다. 좌석 배정 순서(`SEAT_POSITIONS`)가 `bottom → left → top → center(우상단) → right` 이며 인덱스 순서(= 턴/비딩 순서)와 같다. 모바일 상단 AI 가로 배열도 왼쪽에서 오른쪽이 턴 순서다.
 - 프론트 컴포넌트는 `useGameStore(s => s.xxx)` 형태의 selector 로 구독한다. 렌더 중 `useGameStore.getState()` 를 호출하지 않는다.
 - 불필요한 문서 파일이나 요약 파일을 추가하지 않는다.
 

@@ -2,7 +2,7 @@
 export { GAME_EVENTS } from './protocol';
 export type { GameEvent } from './protocol';
 
-export const SEAT_POSITIONS = ['bottom', 'top', 'left', 'right', 'center'] as const;
+export const SEAT_POSITIONS = ['bottom', 'left', 'top', 'center', 'right'] as const;
 export type SeatPosition = (typeof SEAT_POSITIONS)[number];
 
 export const DEFAULT_BID_MIN = 13;
