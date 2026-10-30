@@ -12,6 +12,7 @@ import { FriendSelectionPanel } from '@/components/FriendSelectionPanel';
 import { ResultModal } from '@/components/ResultModal';
 import { SessionFailedModal } from '@/components/SessionFailedModal';
 import { SuitIcon, SUIT_SYMBOL } from '@/components/SuitIcon';
+import { GAME_EVENTS } from '@/types/protocol';
 
 const FRIEND_LABEL: Record<FriendDeclaration['type'], string> = {
   NO_FRIEND: '노프렌드',
@@ -79,7 +80,7 @@ export default function GamePage({ params }: { params: { roomId: string } }) {
       }
       // The server only deals once (idempotent); skip the request when the game is already running.
       if (!cancelled && useGameStore.getState().phase === 'READY') {
-        socket.emit('start_game', { roomId: params.roomId });
+        socket.emit(GAME_EVENTS.START_GAME, { roomId: params.roomId });
       }
     };
     void enter();

@@ -1,11 +1,11 @@
 import assert from 'node:assert/strict';
 import { GameEngine } from './game-engine';
-import type { Card, Player } from '../entities/game.entity';
+import type { BidGiruda, Card, Player } from '../entities/game.entity';
 
 const card = (suit: string, rank: string): Card =>
   ({ id: `${suit}_${rank}`, suit, rank, isJoker: suit === 'JOKER' }) as unknown as Card;
 
-function makeEngine(giruda = 'SPADE') {
+function makeEngine(giruda: BidGiruda = 'SPADE') {
   const players = Array.from({ length: 5 }, (_, i) => ({
     id: `p${i}`,
     socketId: '',
@@ -21,7 +21,7 @@ function makeEngine(giruda = 'SPADE') {
   })) as unknown as Player[];
   const engine = new GameEngine({ players, giruda });
   engine.state.phase = 'TRICK_PLAYING';
-  engine.state.giruda = giruda as never;
+  engine.state.giruda = giruda;
   engine.state.presidentIndex = 0;
   engine.state.currentTrickNumber = 2;
   (engine as unknown as { _trickNumber: number })._trickNumber = 2;

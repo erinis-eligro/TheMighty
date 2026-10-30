@@ -9,7 +9,7 @@ import {
   MessageBody,
   WsException,
 } from '@nestjs/websockets';
-import { Namespace, Server, Socket } from 'socket.io';
+import { Namespace, Server as IoServer, Socket as IoSocket } from 'socket.io';
 import { Logger, UseFilters, UsePipes, ValidationPipe } from '@nestjs/common';
 import { GameService } from './game.service';
 import { PrismaService } from '../prisma/prisma.service';
@@ -17,12 +17,14 @@ import { GAME_EVENTS, getAiTurnDelayMs, getTrickResolvedDelayMs } from './consta
 import { GameWsExceptionFilter } from './game-ws-exception.filter';
 import {
   Ack,
+  ClientToServerEvents,
   CreateRoomAckData,
   GAME_NAMESPACE,
   GameErrorPayload,
   RoomAckData,
   RoomIdAckData,
   SESSION_FAILED_CODE,
+  ServerToClientEvents,
   StartGameAckData,
 } from './protocol';
 import {
@@ -36,7 +38,7 @@ import {
   PlayCardDto,
   StartGameDto,
 } from './dto/game.dto';
-import { GameSession, Player, Trick } from './entities/game.entity';
+import { FriendDeclaration, GameSession, Player, Trick } from './entities/game.entity';
 import {
   selectBid,
   selectCardToPlay,
@@ -50,6 +52,12 @@ import {
   TOTAL_TRICKS,
 } from './core';
 import { Role, Giruda } from '@prisma/client';
+
+type Server = IoServer<ClientToServerEvents, ServerToClientEvents>;
+type Socket = IoSocket<ClientToServerEvents, ServerToClientEvents>;
+
+/** Events sent per player with a payload masked for that player. */
+type MaskedEvent = typeof GAME_EVENTS.STATE_SYNC | typeof GAME_EVENTS.GAME_STARTED;
 
 const AI_ACTIVE_PHASES = ['BIDDING', 'KITTY_EXCHANGE', 'FRIEND_SELECTION', 'TRICK_PLAYING'];
 
@@ -137,9 +145,16 @@ export class GameGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
   }
 
   /** Sends one event to every bound socket with a payload masked for that socket's player. */
-  private emitMasked(managed: GameSession, event: string, build: (playerId: string) => unknown) {
+  private emitMasked<E extends MaskedEvent>(
+    managed: GameSession,
+    event: E,
+    build: (playerId: string) => Parameters<ServerToClientEvents[E]>[0]
+  ) {
     if (managed.humanSocketId) {
-      this.server.to(managed.humanSocketId).emit(event, build(managed.humanPlayerId));
+      const emitter = this.server.to(managed.humanSocketId) as unknown as {
+        emit: (event: E, payload: Parameters<ServerToClientEvents[E]>[0]) => void;
+      };
+      emitter.emit(event, build(managed.humanPlayerId));
     }
   }
 
@@ -514,7 +529,7 @@ export class GameGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
   private emitFriendDeclared(
     roomId: string,
     playerId: string,
-    result: { declaration: unknown; friendRevealed?: FriendReveal }
+    result: { declaration: FriendDeclaration; friendRevealed?: FriendReveal }
   ) {
     this.server.to(roomId).emit(GAME_EVENTS.FRIEND_DECLARED, {
       roomId,
