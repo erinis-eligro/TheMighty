@@ -239,3 +239,15 @@ test('giruda lead restriction only applies to the president leading, not to foll
   // Following a lead (leadSuit set) is never a "lead".
   assert.equal(validatePlay({ ...base, leadSuit: 'HEART', restrictGirudaLead: true }).valid, true);
 });
+
+test('giruda lead restriction does not apply to no-giruda games', () => {
+  const base = {
+    card: card('HEART', 'A'),
+    hand: [card('HEART', 'A'), card('CLUB', '4')],
+    trickNumber: 1,
+    totalTricks: 10,
+    giruda: 'NO_GIRUDA',
+    restrictGirudaLead: true,
+  };
+  assert.equal(validatePlay(base).valid, true);
+});
