@@ -1,7 +1,7 @@
 'use client';
 
 import { motion } from 'framer-motion';
-import { SUIT_SYMBOL } from './SuitIcon';
+import { CardChip } from './SuitIcon';
 import { sortHand } from '@/lib/cards';
 import { useGameStore, type Player as PlayerType } from '@/store/useGameStore';
 
@@ -46,15 +46,7 @@ export function PlayerArea({ player, isCurrentTurn }: PlayerAreaProps) {
       {player.collectedScoreCards.length > 0 && (
         <div className="hidden md:flex flex-wrap justify-center gap-0.5 max-w-40" aria-label="획득한 점수 카드">
           {sortHand(player.collectedScoreCards, giruda).map((c) => (
-            <span
-              key={c.id}
-              className={`text-[10px] font-bold bg-white rounded px-1 border border-pastel-border ${
-                c.suit === 'DIAMOND' || c.suit === 'HEART' ? 'text-suit-red' : 'text-suit-black'
-              }`}
-            >
-              {SUIT_SYMBOL[c.suit]}
-              {c.rank}
-            </span>
+            <CardChip key={c.id} card={c} />
           ))}
         </div>
       )}

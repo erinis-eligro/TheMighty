@@ -4,7 +4,7 @@ import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useGameStore, type PlayerRole, type Player as PlayerType } from '@/store/useGameStore';
 import { sortHand } from '@/lib/cards';
-import { SUIT_SYMBOL, SuitIcon, girudaLabel } from './SuitIcon';
+import { CardChip, SuitIcon, girudaLabel } from './SuitIcon';
 
 export const ROLE_LABEL: Record<PlayerRole, string> = {
   OWNER: '주공',
@@ -21,14 +21,7 @@ function CardChips({ players, giruda }: { players: PlayerType[]; giruda: string 
   return (
     <div className="flex flex-wrap gap-0.5" aria-label="획득한 점수 카드">
       {cards.map((c) => (
-        <span
-          key={c.id}
-          className={`text-[11px] font-bold bg-white rounded px-1 border border-pastel-border ${
-            c.suit === 'DIAMOND' || c.suit === 'HEART' ? 'text-suit-red' : 'text-suit-black'
-          }`}
-        >
-          {c.isJoker ? '🃏' : `${SUIT_SYMBOL[c.suit]}${c.rank}`}
-        </span>
+        <CardChip key={c.id} card={c} />
       ))}
     </div>
   );

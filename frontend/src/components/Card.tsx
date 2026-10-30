@@ -1,6 +1,7 @@
 'use client';
 
 import { motion } from 'framer-motion';
+import { SuitGlyph } from './SuitIcon';
 import { useGameStore, type Card as CardType, type Player as PlayerType } from '@/store/useGameStore';
 
 type CardProps = {
@@ -19,14 +20,6 @@ type CardProps = {
   size?: 'hand' | 'fill';
 };
 
-const SUIT_ICON: Record<string, string> = {
-  SPADE: '♠',
-  DIAMOND: '◆',
-  HEART: '♥',
-  CLUB: '♣',
-  JOKER: '🃏',
-};
-
 const SUIT_COLOR_CLASS: Record<string, string> = {
   SPADE: 'text-suit-black',
   DIAMOND: 'text-suit-red',
@@ -39,6 +32,23 @@ const SIZE_CLASS = {
   hand: 'w-card-w-sm h-card-h-sm md:w-card-w md:h-card-h lg:w-card-w-lg lg:h-card-h-lg',
   fill: 'w-full h-full',
 };
+
+function CornerIndex({ card, suitColor, compact, className }: { card: CardType; suitColor: string; compact: boolean; className: string }) {
+  const rankClass = compact ? 'text-xs' : 'text-sm md:text-lg';
+  const suitClass = compact ? 'h-2.5 w-2.5' : 'h-3 w-3 md:h-4 md:w-4';
+  return (
+    <div className={`absolute flex flex-col items-center leading-none font-extrabold pointer-events-none ${suitColor} ${className}`}>
+      {card.isJoker ? (
+        <span className={compact ? 'text-xs' : 'text-sm md:text-lg'}>🃏</span>
+      ) : (
+        <>
+          <span className={rankClass}>{card.rank}</span>
+          <SuitGlyph suit={card.suit} className={`${suitClass} mt-0.5`} />
+        </>
+      )}
+    </div>
+  );
+}
 
 export function Card({ card, selectable, selected = false, inert = false, dimmed = false, onBlockedSelect, onSelect, size = 'hand' }: CardProps) {
   const isMyTurn = useGameStore((s) => s.players[s.currentTurnIndex]?.id === s.playerId);
@@ -81,21 +91,17 @@ export function Card({ card, selectable, selected = false, inert = false, dimmed
         </div>
       ) : (
         <>
-          <div className={`absolute top-1 left-1 ${r('', 'md:top-2 md:left-2')} ${r('text-[10px]', 'md:text-xs')} font-bold ${suitColor}`}>
-            {SUIT_ICON[card.suit]}
+          {/* Center: large suit, sized relative to the card so it scales with every card size. */}
+          <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+            {card.isJoker ? (
+              <span className={`${r('text-3xl', 'md:text-5xl')} leading-none`}>🃏</span>
+            ) : (
+              <SuitGlyph suit={card.suit} className={`aspect-square w-auto ${compact ? 'h-[42%]' : 'h-[46%]'} ${suitColor}`} />
+            )}
           </div>
-          <div className={`absolute top-1 right-1 ${r('', 'md:top-2 md:right-2')} ${r('text-[10px]', 'md:text-xs')} font-bold transform rotate-180 ${suitColor}`}>
-            {SUIT_ICON[card.suit]}
-          </div>
-          <div className={`${r('text-lg', 'md:text-2xl')} font-bold ${suitColor}`}>
-            {card.isJoker ? '🃏' : card.rank}
-          </div>
-          <div className={`absolute bottom-1 left-1 ${r('', 'md:bottom-2 md:left-2')} ${r('text-[10px]', 'md:text-xs')} font-bold transform rotate-180 ${suitColor}`}>
-            {SUIT_ICON[card.suit]}
-          </div>
-          <div className={`absolute bottom-1 right-1 ${r('', 'md:bottom-2 md:right-2')} ${r('text-[10px]', 'md:text-xs')} font-bold ${suitColor}`}>
-            {SUIT_ICON[card.suit]}
-          </div>
+          {/* Corner indexes: rank + small suit, bottom-right rotated 180deg like a real playing card. */}
+          <CornerIndex card={card} suitColor={suitColor} compact={compact} className={`top-0.5 left-1 ${r('', 'md:top-1 md:left-1.5')}`} />
+          <CornerIndex card={card} suitColor={suitColor} compact={compact} className={`bottom-0.5 right-1 rotate-180 ${r('', 'md:bottom-1 md:right-1.5')}`} />
         </>
       )}
     </motion.button>
