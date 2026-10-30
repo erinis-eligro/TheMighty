@@ -25,7 +25,17 @@ import {
   SESSION_FAILED_CODE,
   StartGameAckData,
 } from './protocol';
-import { CreateRoomDto, DeclareFriendDto, ExchangeKittyDto, JoinRoomDto, PlaceBidDto, PlayCardDto } from './dto/game.dto';
+import {
+  CreateRoomDto,
+  DeclareFriendDto,
+  ExchangeKittyDto,
+  GetStateDto,
+  JoinRoomDto,
+  LeaveRoomDto,
+  PlaceBidDto,
+  PlayCardDto,
+  StartGameDto,
+} from './dto/game.dto';
 import { GameSession, Player, Trick } from './entities/game.entity';
 import {
   selectBid,
@@ -455,6 +465,7 @@ export class GameGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
 
     const result = engine.getResult();
     this.gameService.clearGameTimers(managed);
+    this.gameService.scheduleFinishedCleanup(managed);
 
     const human = engine.state.players.find((p) => p.id === managed.humanPlayerId);
     const humanScore = result.players.find((p) => p.playerId === managed.humanPlayerId);
@@ -540,6 +551,9 @@ export class GameGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
       client.leave(previous.id);
       this.gameService.deleteSession(previous.id);
     }
+    if (!this.gameService.hasCapacity()) {
+      throw new WsException({ code: 'SERVER_BUSY', message: 'Too many games are running. Please try again later.' });
+    }
     const session = this.gameService.createSession(dto.username, client.id);
     const roomId = session.id;
     const humanId = session.humanPlayerId;
@@ -588,33 +602,41 @@ export class GameGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
   }
 
   @SubscribeMessage(GAME_EVENTS.LEAVE_ROOM)
-  handleLeaveRoom(@ConnectedSocket() client: Socket, @MessageBody() data: { roomId: string; playerId: string }) {
+  @UsePipes(new ValidationPipe({ whitelist: true, transform: true }))
+  handleLeaveRoom(@ConnectedSocket() client: Socket, @MessageBody() data: LeaveRoomDto) {
     const managed = this.gameService.findSession(data.roomId);
     // Identity is decided by the server: only the player bound to this socket may leave as that player.
-    if (managed && this.boundPlayerId(managed, client) === data.playerId) {
+    const boundId = managed ? this.boundPlayerId(managed, client) : undefined;
+    if (managed && boundId && (data.playerId === undefined || data.playerId === boundId)) {
       // Single-player room: when the human leaves there is nobody left to play for.
       this.gameService.deleteSession(data.roomId);
       this.server.to(data.roomId).emit(GAME_EVENTS.PLAYER_LEFT, {
         roomId: data.roomId,
-        playerId: data.playerId,
+        playerId: boundId,
       });
     }
     client.leave(data.roomId);
-    return this.ok<RoomAckData>({ roomId: data.roomId, playerId: data.playerId });
+    return this.ok<RoomAckData>({ roomId: data.roomId, playerId: boundId ?? data.playerId ?? '' });
   }
 
+  /** Only the socket bound to the room's human seat may read the room's state. */
   @SubscribeMessage(GAME_EVENTS.GET_STATE)
-  handleGetState(@ConnectedSocket() client: Socket, @MessageBody() data: { roomId: string }) {
+  @UsePipes(new ValidationPipe({ whitelist: true, transform: true }))
+  handleGetState(@ConnectedSocket() client: Socket, @MessageBody() data: GetStateDto) {
     const managed = this.getManaged(data.roomId);
+    const playerId = this.boundPlayerId(managed, client);
+    if (!playerId) {
+      throw new WsException({ code: 'INVALID_PLAYER', message: 'This socket is not bound to that room' });
+    }
     // Mask for the player bound to this socket (a socket id is not a player id).
-    client.emit(GAME_EVENTS.STATE_SYNC, this.publicState(managed, this.boundPlayerId(managed, client) ?? ''));
+    client.emit(GAME_EVENTS.STATE_SYNC, this.publicState(managed, playerId));
     return this.ok<RoomIdAckData>({ roomId: data.roomId });
   }
 
   /** Idempotent: only the first call in READY deals; later calls (reload, re-render) change nothing. */
   @SubscribeMessage(GAME_EVENTS.START_GAME)
   @UsePipes(new ValidationPipe({ whitelist: true, transform: true }))
-  handleStartGame(@ConnectedSocket() client: Socket, @MessageBody() data: { roomId: string }) {
+  handleStartGame(@ConnectedSocket() client: Socket, @MessageBody() data: StartGameDto) {
     const managed = this.getManaged(data.roomId);
     const engine = managed.engine;
 

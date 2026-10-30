@@ -19,6 +19,7 @@ import {
   GIRUDA_CHANGE_RAISE,
 } from './rules';
 import { assertTransition } from './phase';
+import { GameRuleError } from './errors';
 import {
   FriendReveal,
   validateFriendDeclaration,
@@ -189,15 +190,15 @@ export class GameEngine {
     redealt: boolean;
   } {
     if (this.state.phase !== 'BIDDING') {
-      throw new Error('Not in bidding phase');
+      throw new GameRuleError('Not in bidding phase');
     }
 
     const playerIndex = this.indexOfPlayer(playerId);
     if (playerIndex < 0) {
-      throw new Error('Player not found');
+      throw new GameRuleError('Player not found');
     }
     if (playerIndex !== this.state.currentTurnIndex) {
-      throw new Error('Not this player turn');
+      throw new GameRuleError('Not this player turn');
     }
 
     const isPass = action.pass === true;
@@ -208,7 +209,7 @@ export class GameEngine {
       isPass,
     });
     if (!validation.valid) {
-      throw new Error(validation.reason ?? 'invalid_bid');
+      throw new GameRuleError(validation.reason ?? 'invalid_bid');
     }
 
     const player = this.state.players[playerIndex];
@@ -312,29 +313,29 @@ export class GameEngine {
     action: { discardCardIds: string[]; giruda?: string; bidScore?: number }
   ): { giruda: BidGiruda; bidScore: number; discarded: Card[] } {
     if (this.state.phase !== 'KITTY_EXCHANGE') {
-      throw new Error('Not in kitty exchange phase');
+      throw new GameRuleError('Not in kitty exchange phase');
     }
 
     const playerIndex = this.indexOfPlayer(playerId);
     if (playerIndex < 0) {
-      throw new Error('Player not found');
+      throw new GameRuleError('Player not found');
     }
     if (playerIndex !== this.state.presidentIndex) {
-      throw new Error('Only the president can exchange the kitty');
+      throw new GameRuleError('Only the president can exchange the kitty');
     }
 
     const ids = action.discardCardIds;
     if (!Array.isArray(ids) || ids.length !== KITTY_SIZE) {
-      throw new Error('must_discard_exactly_3');
+      throw new GameRuleError('must_discard_exactly_3');
     }
     if (new Set(ids).size !== ids.length) {
-      throw new Error('duplicate_discard');
+      throw new GameRuleError('duplicate_discard');
     }
 
     const president = this.state.players[playerIndex];
     const combined = [...president.hand, ...this.state.kitty];
     if (!ids.every((id) => combined.some((c) => c.id === id))) {
-      throw new Error('discard_not_in_hand');
+      throw new GameRuleError('discard_not_in_hand');
     }
 
     const bid = this.state.highestBid;
@@ -343,25 +344,25 @@ export class GameEngine {
     }
     const requestedGiruda = (action.giruda ?? bid.giruda) as BidGiruda;
     if (!BID_GIRUDAS.includes(requestedGiruda)) {
-      throw new Error('invalid_giruda');
+      throw new GameRuleError('invalid_giruda');
     }
 
     let finalScore = bid.score;
     if (requestedGiruda !== bid.giruda) {
       const raised = action.bidScore;
       if (raised === undefined || !Number.isInteger(raised)) {
-        throw new Error('bid_raise_required');
+        throw new GameRuleError('bid_raise_required');
       }
       if (raised < bid.score + GIRUDA_CHANGE_RAISE) {
-        throw new Error('bid_raise_too_small');
+        throw new GameRuleError('bid_raise_too_small');
       }
       if (raised > MAX_BID) {
-        throw new Error('bid_above_maximum');
+        throw new GameRuleError('bid_above_maximum');
       }
       finalScore = raised;
     } else if (action.bidScore !== undefined && action.bidScore !== bid.score) {
       // Without a giruda change the bid score is fixed.
-      throw new Error('bid_raise_requires_giruda_change');
+      throw new GameRuleError('bid_raise_requires_giruda_change');
     }
 
     this.transition('FRIEND_SELECTION');
@@ -455,18 +456,18 @@ export class GameEngine {
     declaration: { type?: string; suit?: string; rank?: string }
   ): { declaration: FriendDeclaration; friendRevealed?: FriendReveal } {
     if (this.state.phase !== 'FRIEND_SELECTION') {
-      throw new Error('Not in friend selection phase');
+      throw new GameRuleError('Not in friend selection phase');
     }
     const playerIndex = this.indexOfPlayer(playerId);
     if (playerIndex < 0) {
-      throw new Error('Player not found');
+      throw new GameRuleError('Player not found');
     }
     if (playerIndex !== this.state.presidentIndex) {
-      throw new Error('Only the president can declare the friend');
+      throw new GameRuleError('Only the president can declare the friend');
     }
     const validation = validateFriendDeclaration(declaration);
     if (!validation.valid) {
-      throw new Error(validation.reason ?? 'invalid_friend_declaration');
+      throw new GameRuleError(validation.reason ?? 'invalid_friend_declaration');
     }
 
     const normalized = (
@@ -534,22 +535,22 @@ export class GameEngine {
     options: { jokerCall?: boolean; jokerLeadSuit?: string } = {}
   ): { valid: boolean; trickComplete?: boolean; trick?: Trick; points?: number; friendRevealed?: FriendReveal } {
     if (this.state.phase !== 'TRICK_PLAYING') {
-      throw new Error('Not in playing phase');
+      throw new GameRuleError('Not in playing phase');
     }
 
     const playerIndex = this.indexOfPlayer(playerId);
     if (playerIndex < 0) {
-      throw new Error('Player not found');
+      throw new GameRuleError('Player not found');
     }
     const player = this.state.players[playerIndex];
 
     if (playerIndex !== this.state.currentTurnIndex) {
-      throw new Error('Not this player turn');
+      throw new GameRuleError('Not this player turn');
     }
 
     const card = player.hand.find((c) => c.id === cardId);
     if (!card) {
-      throw new Error('Card not in hand');
+      throw new GameRuleError('Card not in hand');
     }
 
     const isLeading = !this.state.currentTrick;
@@ -570,7 +571,7 @@ export class GameEngine {
     });
 
     if (!validation.valid) {
-      throw new Error(validation.reason ?? 'invalid_play');
+      throw new GameRuleError(validation.reason ?? 'invalid_play');
     }
 
     player.hand = player.hand.filter((c) => c.id !== cardId);

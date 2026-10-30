@@ -83,3 +83,16 @@ export function getAiTurnDelayMs(random: () => number = Math.random): number {
 
 /** How long a session survives after its human disconnected; afterwards it is deleted. */
 export const SESSION_TTL_MS = 5 * 60 * 1000;
+
+/** After the game ended the session (result already sent and saved) is dropped after this long. */
+export const FINISHED_SESSION_TTL_MS = 5 * 60 * 1000;
+
+/** Upper bound of simultaneously held sessions; `create_room` is refused beyond it. */
+export const MAX_SESSIONS = 200;
+
+/** Reads the session limit; `MAX_SESSIONS` env var (a positive integer) overrides the default. */
+export function getMaxSessions(): number {
+  const raw = process.env.MAX_SESSIONS?.trim();
+  if (!raw || !/^\d+$/.test(raw) || Number.parseInt(raw, 10) < 1) return MAX_SESSIONS;
+  return Number.parseInt(raw, 10);
+}

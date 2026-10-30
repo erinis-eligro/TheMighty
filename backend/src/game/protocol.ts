@@ -57,7 +57,8 @@ export interface JoinRoomRequest {
 
 export interface LeaveRoomRequest {
   roomId: string;
-  playerId: string;
+  /** Optional: the server identifies the player by the socket; if sent it must match. */
+  playerId?: string;
 }
 
 export interface GetStateRequest {
