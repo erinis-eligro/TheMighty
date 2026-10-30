@@ -11,6 +11,7 @@ import type {
   PlayCardRequest,
   RoomAckData,
 } from '@/types/protocol';
+import { SESSION_FAILED_CODE } from '@/types/protocol';
 
 export type Card = {
   id: string;
@@ -140,6 +141,8 @@ interface GameState {
   /** Last socket connection failure (cleared on connect); shown by the connection banner. */
   connectionError: string | null;
   error: string | null;
+  /** The server gave up on this game (fatal `game_error`): the only way out is a new game or the lobby. */
+  sessionFailed: boolean;
 
   setSocket: (socket: Socket) => void;
   /** The one place that creates the game socket and registers the server event listeners. */
@@ -208,6 +211,7 @@ export const useGameStore = create<GameState>((set, get) => ({
   isConnected: false,
   connectionError: null,
   error: null,
+  sessionFailed: false,
 
   setSocket: (socket) => set({ socket }),
   connect: (url) => {
@@ -220,7 +224,9 @@ export const useGameStore = create<GameState>((set, get) => ({
     });
     socket.on('disconnect', () => set({ isConnected: false }));
     socket.on('connect_error', (err) => set({ isConnected: false, connectionError: err.message }));
-    socket.on('game_error', (e: GameErrorPayload) => set({ error: e.message }));
+    socket.on('game_error', (e: GameErrorPayload) =>
+      set(e.code === SESSION_FAILED_CODE ? { sessionFailed: true, error: null } : { error: e.message }),
+    );
     socket.on('room_created', (data: { roomId: string; playerId: string }) =>
       set({ roomId: data.roomId, playerId: data.playerId, phase: 'READY' }),
     );
@@ -296,6 +302,6 @@ export const useGameStore = create<GameState>((set, get) => ({
     phase: 'READY', players: [], currentTrick: null, trickHistory: [], currentTrickNumber: 0,
     currentTurnIndex: 0, turnPlayerId: '', leadSuit: null, isJokerCallActive: false, jokerCallCard: null, kitty: [],
     presidentIndex: null, friendDeclaration: null, friendIndex: null, friendPlayerId: undefined, friendRevealed: false,
-    passCount: 0, currentBid: 0, highestBid: null, bidLeader: undefined, playableCardIds: [], result: null, error: null,
+    passCount: 0, currentBid: 0, highestBid: null, bidLeader: undefined, playableCardIds: [], result: null, error: null, sessionFailed: false,
   }),
 }));
