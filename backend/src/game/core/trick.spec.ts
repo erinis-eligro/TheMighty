@@ -85,16 +85,54 @@ test('joker may be played (powerless) on the first and last trick when following
   }
 });
 
-test('mighty does not have to be played to follow suit, and must follow only if it is the lead suit card', () => {
+test('mighty is exempt from following suit and is not a lead-suit card that forces following', () => {
   const mighty = card('SPADE', 'A');
   const heart = card('HEART', '4');
+  const club = card('CLUB', '7');
   const hand = [mighty, heart];
-  // lead suit HEART, holds a heart: must follow, mighty cannot be dumped
-  assert.equal(validatePlay({ ...base, card: mighty, hand, leadSuit: 'HEART', isLeading: false, trickNumber: 3 }).reason, 'must_follow_lead_suit');
-  // lead suit SPADE, the mighty is the only spade: it is a legal follow
-  assert.equal(validatePlay({ ...base, card: mighty, hand, leadSuit: 'SPADE', isLeading: false, trickNumber: 3 }).valid, true);
+  const follow = { ...base, isLeading: false, trickNumber: 3 };
+  // lead suit HEART, holds a heart: the mighty may still be played, as may the heart
+  assert.equal(validatePlay({ ...follow, card: mighty, hand, leadSuit: 'HEART' }).valid, true);
+  assert.equal(validatePlay({ ...follow, card: heart, hand, leadSuit: 'HEART' }).valid, true);
+  // lead suit SPADE, the mighty is the only spade: no obligation to follow, any card is legal
+  assert.equal(validatePlay({ ...follow, card: mighty, hand, leadSuit: 'SPADE' }).valid, true);
+  assert.equal(validatePlay({ ...follow, card: heart, hand, leadSuit: 'SPADE' }).valid, true);
+  // a non-mighty lead-suit card in hand still forces following for the other cards
+  const withSpade = [mighty, card('SPADE', '5'), club];
+  assert.equal(validatePlay({ ...follow, card: club, hand: withSpade, leadSuit: 'SPADE' }).reason, 'must_follow_lead_suit');
   // the joker does not count as a card of the lead suit
-  assert.equal(validatePlay({ ...base, card: heart, hand: [heart, joker()], leadSuit: 'SPADE', isLeading: false, trickNumber: 3 }).valid, true);
+  assert.equal(validatePlay({ ...follow, card: heart, hand: [heart, joker()], leadSuit: 'SPADE' }).valid, true);
+});
+
+test('mighty follows the giruda: with SPADE giruda the mighty is DIAMOND A and SPADE A is ordinary', () => {
+  const dA = card('DIAMOND', 'A');
+  const sA = card('SPADE', 'A');
+  const d5 = card('DIAMOND', '5');
+  const follow = { ...base, giruda: 'SPADE', isLeading: false, trickNumber: 3 };
+  // lead DIAMOND with a lower diamond in hand: the mighty (DIAMOND A) may be played anyway
+  const hand = [dA, d5, sA];
+  assert.equal(validatePlay({ ...follow, card: dA, hand, leadSuit: 'DIAMOND' }).valid, true);
+  assert.equal(validatePlay({ ...follow, card: sA, hand, leadSuit: 'DIAMOND' }).reason, 'must_follow_lead_suit');
+  // lead DIAMOND where DIAMOND A is the only diamond: no obligation to follow
+  assert.equal(validatePlay({ ...follow, card: sA, hand: [dA, sA], leadSuit: 'DIAMOND' }).valid, true);
+  // lead SPADE: SPADE A is not the mighty, so it is a normal lead-suit card and forces following
+  const h = card('HEART', '2');
+  assert.equal(validatePlay({ ...follow, card: h, hand: [sA, h], leadSuit: 'SPADE' }).reason, 'must_follow_lead_suit');
+  assert.equal(validatePlay({ ...follow, card: dA, hand: [sA, dA], leadSuit: 'SPADE' }).valid, true);
+});
+
+test('joker call active: the joker-call card takes priority over the mighty', () => {
+  const callCard = card('CLUB', '3');
+  const mighty = card('SPADE', 'A');
+  const d9 = card('DIAMOND', '9');
+  const hand = [callCard, mighty, d9];
+  const args = { ...base, hand, leadSuit: 'DIAMOND', isLeading: false, trickNumber: 3, isJokerCallActive: true };
+  assert.equal(validatePlay({ ...args, card: mighty }).reason, 'must_play_joker_call_card');
+  assert.equal(validatePlay({ ...args, card: d9 }).reason, 'must_play_joker_call_card');
+  assert.equal(validatePlay({ ...args, card: callCard }).valid, true);
+  // without the call card in hand the mighty is playable again
+  const noCall = [mighty, d9];
+  assert.equal(validatePlay({ ...args, hand: noCall, card: mighty }).valid, true);
 });
 
 test('isJokerPowerless: first trick, last trick, or joker call', () => {

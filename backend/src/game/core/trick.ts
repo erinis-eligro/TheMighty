@@ -31,9 +31,11 @@ export interface PlayValidation {
  *   joker-call card.
  * - `jokerLeadSuit` is the suit named by a leader who leads with the joker.
  *
- * The joker is exempt from following suit. The mighty is an ordinary card of its own suit for
- * follow-suit purposes. On the first/last trick and in a joker-call trick the joker may be
- * played but has no power (see `isJokerPowerless`); it cannot lead the first trick.
+ * The joker and the mighty are exempt from following suit (and are not counted as lead-suit
+ * cards when checking whether the player must follow). A declared joker call still takes
+ * priority: its holder must play the joker-call card, even over the mighty. On the first/last
+ * trick and in a joker-call trick the joker may be played but has no power (see
+ * `isJokerPowerless`); it cannot lead the first trick.
  */
 export function validatePlay({
   card,
@@ -107,8 +109,11 @@ export function validatePlay({
     }
   }
 
-  if (leadSuit && !isJokerCard(card)) {
-    const hasLeadSuit = hand.some((c) => c.suit === leadSuit && !isJokerCard(c));
+  // The joker and the mighty are exempt from following suit, and do not count as lead-suit cards.
+  if (leadSuit && !isJokerCard(card) && !isMightyCard(card, giruda)) {
+    const hasLeadSuit = hand.some(
+      (c) => c.suit === leadSuit && !isJokerCard(c) && !isMightyCard(c, giruda)
+    );
     if (hasLeadSuit && card.suit !== leadSuit) {
       return { valid: false, reason: 'must_follow_lead_suit' };
     }
