@@ -159,8 +159,6 @@ export interface GameSession {
   finished?: boolean;
   /** Fires after TRICK_RESOLVED_DELAY_MS to start the next trick / finish the game. */
   resolveTimer?: NodeJS.Timeout;
-  /** Consecutive failed AI steps; the driver gives up after MAX_AI_FAILURES instead of looping on an error. */
-  aiFailures?: number;
   /** Deletes the session if the human does not come back within SESSION_TTL_MS after a disconnect. */
   expiryTimer?: NodeJS.Timeout;
   createdAt: Date;

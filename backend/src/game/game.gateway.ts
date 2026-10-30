@@ -15,7 +15,16 @@ import { GameService } from './game.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { GAME_EVENTS, getAiTurnDelayMs, getTrickResolvedDelayMs } from './constants';
 import { GameWsExceptionFilter } from './game-ws-exception.filter';
-import { Ack, CreateRoomAckData, GAME_NAMESPACE, RoomAckData, RoomIdAckData, StartGameAckData } from './protocol';
+import {
+  Ack,
+  CreateRoomAckData,
+  GAME_NAMESPACE,
+  GameErrorPayload,
+  RoomAckData,
+  RoomIdAckData,
+  SESSION_FAILED_CODE,
+  StartGameAckData,
+} from './protocol';
 import { CreateRoomDto, DeclareFriendDto, ExchangeKittyDto, JoinRoomDto, PlaceBidDto, PlayCardDto } from './dto/game.dto';
 import { GameSession, Player, Trick } from './entities/game.entity';
 import {
@@ -24,11 +33,14 @@ import {
   selectFriendDeclaration,
   selectKittyDiscard,
   type FriendReveal,
+  cardBaseStrength,
+  isJokerCard,
+  isMightyCard,
+  KITTY_SIZE,
   TOTAL_TRICKS,
 } from './core';
 import { Role, Giruda } from '@prisma/client';
 
-const MAX_AI_FAILURES = 3;
 const AI_ACTIVE_PHASES = ['BIDDING', 'KITTY_EXCHANGE', 'FRIEND_SELECTION', 'TRICK_PLAYING'];
 
 // CORS origins are configured via the CORS_ORIGIN env var in main.ts (CorsIoAdapter).
@@ -167,7 +179,8 @@ export class GameGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
    * Auto Turn Driver. If it is an AI's turn, performs exactly one AI action after a random
    * 1~1.5s delay, broadcasts the state and schedules the next step. It stops by itself when the
    * room is gone or finished, in phases without an AI action (e.g. TRICK_RESOLVED, which has its
-   * own timer), on a human's turn, and after repeated errors.
+   * own timer) and on a human's turn. If an AI step throws, a legal fallback move is played instead;
+   * if that fails too the session is aborted and the client is told (see `failSession`).
    */
   private scheduleAiTurn(roomId: string, delayMs = getAiTurnDelayMs()) {
     const managed = this.gameService.findSession(roomId);
@@ -188,20 +201,31 @@ export class GameGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
       const current = engine.state.players[engine.state.currentTurnIndex];
       if (!AI_ACTIVE_PHASES.includes(engine.state.phase) || !current?.isAi || current.id !== turnPlayerId) return;
 
-      let failed = false;
+      const phaseBefore = engine.state.phase;
+      const turnBefore = engine.state.currentTurnIndex;
       try {
         this.runAiStep(roomId, managed, current);
-        managed.aiFailures = 0;
       } catch (e) {
-        failed = true;
-        managed.aiFailures = (managed.aiFailures ?? 0) + 1;
-        this.logger.error(`AI turn error (${managed.aiFailures}/${MAX_AI_FAILURES}): ${(e as Error).message}`);
+        this.logger.error(`AI turn error, playing a fallback move: ${(e as Error).message}`);
+        try {
+          // The engine validates before it changes anything, so normally the turn is still open.
+          // If the step got as far as moving the game on (and only a later announcement failed),
+          // there is nothing left to play; just make sure a completed trick is still advanced.
+          if (engine.state.phase === phaseBefore && engine.state.currentTurnIndex === turnBefore) {
+            this.runAiFallbackStep(roomId, managed, current);
+          } else if (engine.state.phase === 'TRICK_RESOLVED' && !managed.resolveTimer) {
+            this.scheduleTrickAdvance(roomId, managed);
+          }
+        } catch (fallbackError) {
+          this.failSession(roomId, managed, `AI turn failed: ${(fallbackError as Error).message}`);
+          return;
+        }
       }
 
       this.broadcastState(managed);
       if (engine.state.phase === 'GAME_OVER') {
         this.finishGameIfOver(roomId);
-      } else if (!failed || (managed.aiFailures ?? 0) < MAX_AI_FAILURES) {
+      } else {
         this.scheduleAiTurn(roomId);
       }
     }, delayMs);
@@ -267,20 +291,82 @@ export class GameGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
             friendDeclaration: engine.state.friendDeclaration,
           },
         });
-        const result = engine.playCard(turnPlayer.id, decision.cardId, {
+        this.playCardAndAnnounce(roomId, managed, turnPlayer.id, decision.cardId, {
           jokerCall: decision.jokerCall,
           jokerLeadSuit: decision.jokerLeadSuit,
         });
-        this.server.to(roomId).emit(GAME_EVENTS.CARD_PLAYED, {
-          roomId,
-          playerId: turnPlayer.id,
-          cardId: decision.cardId,
-        });
-        if (result.friendRevealed) this.emitFriendRevealed(roomId, result.friendRevealed);
-        this.handleTrickResult(roomId, managed, result);
         break;
       }
     }
+  }
+
+  /** Plays a card in the engine and announces it (card, friend reveal, completed trick). */
+  private playCardAndAnnounce(
+    roomId: string,
+    managed: GameSession,
+    playerId: string,
+    cardId: string,
+    options: { jokerCall?: boolean; jokerLeadSuit?: string } = {}
+  ) {
+    const result = managed.engine.playCard(playerId, cardId, options);
+    this.server.to(roomId).emit(GAME_EVENTS.CARD_PLAYED, { roomId, playerId, cardId });
+    if (result.friendRevealed) this.emitFriendRevealed(roomId, result.friendRevealed);
+    this.handleTrickResult(roomId, managed, result);
+  }
+
+  /**
+   * Last resort when the normal AI step threw: a simple legal move for the current phase (pass,
+   * discard the 3 weakest cards, no friend, the first playable card). Throws if even that fails.
+   */
+  private runAiFallbackStep(roomId: string, managed: GameSession, turnPlayer: Player) {
+    const engine = managed.engine;
+    switch (engine.state.phase) {
+      case 'BIDDING': {
+        const result = engine.placeBid(turnPlayer.id, { pass: true });
+        this.emitBidResult(roomId, turnPlayer.id, null, null, true, result);
+        break;
+      }
+      case 'KITTY_EXCHANGE': {
+        // Never throw away the joker or the mighty; the bid giruda stays as it is.
+        const giruda = engine.state.giruda as string;
+        const discardCardIds = [...turnPlayer.hand, ...engine.state.kitty]
+          .filter((c) => !isJokerCard(c) && !isMightyCard(c, giruda))
+          .sort((a, b) => cardBaseStrength(a) - cardBaseStrength(b))
+          .slice(0, KITTY_SIZE)
+          .map((c) => c.id);
+        const result = engine.exchangeKitty(turnPlayer.id, { discardCardIds });
+        this.emitKittyExchanged(roomId, turnPlayer.id, result);
+        break;
+      }
+      case 'FRIEND_SELECTION': {
+        const result = engine.declareFriend(turnPlayer.id, { type: 'NO_FRIEND' });
+        this.emitFriendDeclared(roomId, turnPlayer.id, result);
+        break;
+      }
+      case 'TRICK_PLAYING': {
+        const playable = engine.getPlayableCardIds(turnPlayer.id);
+        // Prefer a non-joker card: a leading joker would also need a named suit.
+        const cardId = playable.find((id) => !turnPlayer.hand.some((c) => c.id === id && isJokerCard(c))) ?? playable[0];
+        if (!cardId) throw new Error('no_playable_card');
+        this.playCardAndAnnounce(roomId, managed, turnPlayer.id, cardId, { jokerLeadSuit: 'SPADE' });
+        break;
+      }
+    }
+  }
+
+  /**
+   * The server can no longer drive this game (the AI step and its fallback, or the trick advance,
+   * failed). Tell the client with a fatal `game_error` so it can offer a new game, and drop the
+   * session, which also clears every timer.
+   */
+  private failSession(roomId: string, managed: GameSession, reason: string) {
+    this.logger.error(`Session ${roomId} aborted: ${reason}`);
+    const payload: GameErrorPayload = {
+      code: SESSION_FAILED_CODE,
+      message: 'The game stopped because of a server error. Please start a new game.',
+    };
+    this.server.to(roomId).emit(GAME_EVENTS.GAME_ERROR, payload);
+    this.gameService.deleteSession(managed.id);
   }
 
   /**
@@ -290,7 +376,6 @@ export class GameGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
   private resumeRoom(roomId: string) {
     const managed = this.gameService.findSession(roomId);
     if (!managed || managed.finished) return;
-    managed.aiFailures = 0;
     const phase = managed.engine.state.phase;
     if (phase === 'TRICK_RESOLVED') {
       this.scheduleTrickAdvance(roomId, managed);
@@ -352,7 +437,7 @@ export class GameGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
           this.scheduleAiTurn(roomId);
         }
       } catch (e) {
-        this.logger.error(`Trick advance error: ${(e as Error).message}`);
+        this.failSession(roomId, managed, `Trick advance failed: ${(e as Error).message}`);
       }
     }, getTrickResolvedDelayMs());
   }

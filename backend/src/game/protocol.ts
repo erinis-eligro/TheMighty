@@ -23,6 +23,12 @@ export type Ack<T = unknown> =
   | { ok: true; data: T; error?: undefined }
   | { ok: false; data?: undefined; error: AckError };
 
+/**
+ * `code` of a `game_error` the server sends when it can no longer drive the game (an AI step and its
+ * fallback, or the trick advance, failed). The session is gone: the client should offer a new game.
+ */
+export const SESSION_FAILED_CODE = 'SESSION_FAILED';
+
 /** Payload of the `game_error` event. */
 export type GameErrorPayload = AckError;
 

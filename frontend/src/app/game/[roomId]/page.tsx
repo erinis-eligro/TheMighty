@@ -10,6 +10,7 @@ import { BiddingPanel } from '@/components/BiddingPanel';
 import { KittyExchangeModal } from '@/components/KittyExchangeModal';
 import { FriendSelectionPanel } from '@/components/FriendSelectionPanel';
 import { ResultModal } from '@/components/ResultModal';
+import { SessionFailedModal } from '@/components/SessionFailedModal';
 import { SuitIcon, SUIT_SYMBOL } from '@/components/SuitIcon';
 
 const FRIEND_LABEL: Record<FriendDeclaration['type'], string> = {
@@ -53,6 +54,7 @@ export default function GamePage({ params }: { params: { roomId: string } }) {
   const turnPlayer = useGameStore((s) => s.players[s.currentTurnIndex]);
   const isConnected = useGameStore((s) => s.isConnected);
   const error = useGameStore((s) => s.error);
+  const sessionFailed = useGameStore((s) => s.sessionFailed);
   const setError = useGameStore((s) => s.setError);
   const rejoinRoom = useGameStore((s) => s.rejoinRoom);
 
@@ -188,6 +190,7 @@ export default function GamePage({ params }: { params: { roomId: string } }) {
       </div>
 
       {phase === 'GAME_OVER' && <ResultModal />}
+      {sessionFailed && <SessionFailedModal />}
     </div>
   );
 }

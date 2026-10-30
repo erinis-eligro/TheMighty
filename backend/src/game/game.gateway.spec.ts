@@ -4,6 +4,7 @@ import { GameGateway } from './game.gateway';
 import { GameService } from './game.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { GAME_EVENTS, SESSION_TTL_MS } from './constants';
+import { SESSION_FAILED_CODE } from './protocol';
 
 type Emit = { room: string; event: string; payload: unknown };
 
@@ -108,6 +109,105 @@ describe('Auto Turn Driver', () => {
     gateway.handleLeaveRoom(client, { roomId, playerId: managed.humanPlayerId });
     assert.equal(jest.getTimerCount(), 0);
     assert.equal(service.findSession(roomId) !== undefined, false);
+  });
+});
+
+describe('Auto Turn Driver failures', () => {
+  beforeEach(() => jest.useFakeTimers());
+  afterEach(() => {
+    jest.restoreAllMocks();
+    jest.useRealTimers();
+  });
+
+  const gameErrors = (emitted: Emit[]) => emitted.filter((e) => e.event === GAME_EVENTS.GAME_ERROR);
+
+  /** Drives the all-AI game until `phase` is reached (it is the AI's turn there). */
+  function advanceToPhase(managed: ReturnType<typeof startAllAiGame>['managed'], phase: string) {
+    for (let i = 0; i < 2000 && managed.engine.state.phase !== phase; i++) jest.advanceTimersByTime(100);
+    assert.equal(managed.engine.state.phase, phase);
+  }
+
+  test('a failing AI bid falls back to a pass and the game keeps going', () => {
+    const { emitted, managed } = startAllAiGame();
+    const engine = managed.engine;
+    const placeBid = jest.spyOn(engine, 'placeBid').mockImplementationOnce(() => {
+      throw new Error('boom');
+    });
+    jest.advanceTimersByTime(1500);
+    // The first call threw, the fallback passed for the same player.
+    assert.equal(placeBid.mock.calls.length, 2);
+    assert.deepEqual(placeBid.mock.calls[1][1], { pass: true });
+    assert.equal(engine.state.players[0].hasPassed, true);
+    assert.equal(gameErrors(emitted).length, 0);
+    for (let i = 0; i < 2000 && engine.state.phase !== 'GAME_OVER'; i++) jest.advanceTimersByTime(500);
+    assert.equal(engine.state.phase, 'GAME_OVER');
+  });
+
+  test('a failing AI kitty exchange falls back to a legal discard', () => {
+    const { emitted, managed } = startAllAiGame();
+    const engine = managed.engine;
+    advanceToPhase(managed, 'KITTY_EXCHANGE');
+    jest.spyOn(engine, 'exchangeKitty').mockImplementationOnce(() => {
+      throw new Error('boom');
+    });
+    jest.advanceTimersByTime(1500);
+    assert.equal(engine.state.phase, 'FRIEND_SELECTION');
+    assert.equal(gameErrors(emitted).length, 0);
+  });
+
+  test('a failing AI friend declaration falls back to no friend', () => {
+    const { emitted, managed } = startAllAiGame();
+    const engine = managed.engine;
+    advanceToPhase(managed, 'FRIEND_SELECTION');
+    jest.spyOn(engine, 'declareFriend').mockImplementationOnce(() => {
+      throw new Error('boom');
+    });
+    jest.advanceTimersByTime(1500);
+    assert.equal(engine.state.phase, 'TRICK_PLAYING');
+    assert.equal(engine.state.friendDeclaration?.type, 'NO_FRIEND');
+    assert.equal(gameErrors(emitted).length, 0);
+  });
+
+  test('a failing AI card play falls back to a playable card', () => {
+    const { emitted, managed } = startAllAiGame();
+    const engine = managed.engine;
+    advanceToPhase(managed, 'TRICK_PLAYING');
+    const playCard = jest.spyOn(engine, 'playCard').mockImplementationOnce(() => {
+      throw new Error('boom');
+    });
+    jest.advanceTimersByTime(1500);
+    assert.equal(playCard.mock.calls.length, 2);
+    assert.equal(engine.state.currentTrick?.cards.length, 1);
+    assert.equal(gameErrors(emitted).length, 0);
+  });
+
+  test('when the fallback fails too, the client gets a fatal game_error and nothing keeps running', () => {
+    const { emitted, managed, service, roomId } = startAllAiGame();
+    jest.spyOn(managed.engine, 'placeBid').mockImplementation(() => {
+      throw new Error('boom');
+    });
+    jest.advanceTimersByTime(1500);
+    const errors = gameErrors(emitted);
+    assert.equal(errors.length, 1);
+    assert.equal(errors[0].room, roomId);
+    assert.equal((errors[0].payload as { code: string }).code, SESSION_FAILED_CODE);
+    assert.equal(service.findSession(roomId), undefined);
+    assert.equal(managed.aiTimers.size, 0);
+    assert.equal(jest.getTimerCount(), 0);
+  });
+
+  test('a failing trick advance sends a fatal game_error and drops the session', () => {
+    const { emitted, managed, service, roomId } = startAllAiGame();
+    jest.spyOn(managed.engine, 'advanceAfterTrick').mockImplementation(() => {
+      throw new Error('boom');
+    });
+    advanceToPhase(managed, 'TRICK_RESOLVED');
+    jest.advanceTimersByTime(2000);
+    const errors = gameErrors(emitted);
+    assert.equal(errors.length, 1);
+    assert.equal((errors[0].payload as { code: string }).code, SESSION_FAILED_CODE);
+    assert.equal(service.findSession(roomId), undefined);
+    assert.equal(jest.getTimerCount(), 0);
   });
 });
 
