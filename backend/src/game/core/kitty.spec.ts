@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { GameEngine } from './game-engine';
-import { selectKittyDiscard } from './ai';
-import { GIRUDA_CHANGE_RAISE } from './rules';
+import { selectCardToPlay, selectKittyDiscard } from './ai';
+import { GIRUDA_CHANGE_RAISE, TOTAL_TRICKS, isPointCard } from './rules';
 import { Player } from '../entities/game.entity';
 
 function makePlayers(): Player[] {
@@ -138,4 +138,40 @@ test('AI discard picks 3 valid cards and keeps joker, mighty and giruda-strength
     engine.exchangeKitty('p2', { discardCardIds });
     assert.equal(engine.state.phase, 'FRIEND_SELECTION');
   }
+});
+
+test('discarded point cards leave the game: the reachable maximum is 20 minus the discarded point cards', () => {
+  const engine = kittyEngine();
+  const combined = [...engine.state.players[2].hand, ...engine.state.kitty];
+  // Discard as many point cards as possible (up to 3), filling up with other cards.
+  const sorted = [...combined].sort((a, b) => Number(isPointCard(b)) - Number(isPointCard(a)));
+  const discard = sorted.slice(0, 3);
+  const discardedPoints = discard.filter((c) => isPointCard(c)).length;
+  engine.exchangeKitty('p2', { discardCardIds: discard.map((c) => c.id) });
+  engine.declareFriend('p2', { type: 'NO_FRIEND' });
+
+  while (['TRICK_PLAYING', 'TRICK_RESOLVED'].includes(engine.state.phase)) {
+    if (engine.state.phase === 'TRICK_RESOLVED') {
+      engine.advanceAfterTrick();
+      continue;
+    }
+    const turn = engine.state.players[engine.state.currentTurnIndex];
+    const d = selectCardToPlay({
+      hand: turn.hand,
+      leadSuit: engine.state.currentTrick?.leadSuit,
+      currentTrickPlays: engine.state.currentTrick?.cards ?? [],
+      giruda: engine.state.giruda,
+      trickNumber: engine.state.currentTrickNumber,
+      totalTricks: TOTAL_TRICKS,
+      isPartnerWinningCurrentTrick: false,
+      mightyCard: engine.mightyCard,
+      jokerCallCard: engine.jokerCallCard,
+      restrictGirudaLead: engine.restrictsGirudaLead(),
+      isJokerCallActive: engine.state.isJokerCallActive,
+    });
+    engine.playCard(turn.id, d.cardId, { jokerCall: d.jokerCall, jokerLeadSuit: d.jokerLeadSuit });
+  }
+
+  const r = engine.getResult();
+  assert.equal(r.teamPoints + r.opponentPoints, 20 - discardedPoints);
 });

@@ -184,6 +184,24 @@ test('everybody passing re-deals: new hands, fresh bidding state', () => {
   engine.placeBid('p0', { score: 13, giruda: 'HEART' });
 });
 
+test('the human (p0) always bids first and the first bidder does not rotate after a re-deal', () => {
+  const engine = newEngine();
+  assert.equal(engine.state.currentTurnIndex, 0);
+  for (const id of ['p0', 'p1', 'p2', 'p3', 'p4']) engine.placeBid(id, { pass: true });
+  assert.equal(engine.state.currentTurnIndex, 0);
+});
+
+test('when the first four pass, the last seat may still bid and becomes president', () => {
+  const engine = newEngine();
+  for (const id of ['p0', 'p1', 'p2', 'p3']) engine.placeBid(id, { pass: true });
+  assert.equal(engine.state.currentTurnIndex, 4);
+  const r = engine.placeBid('p4', { score: 13, giruda: 'CLUB' });
+  assert.equal(r.completed, true);
+  assert.equal(r.redealt, false);
+  assert.equal(engine.state.ownerPlayerId, 'p4');
+  assert.equal(engine.state.phase, 'KITTY_EXCHANGE');
+});
+
 test('AI bids always carry a giruda and are accepted by the engine', () => {
   for (let i = 0; i < 50; i++) {
     const engine = newEngine();
