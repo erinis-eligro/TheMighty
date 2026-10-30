@@ -145,6 +145,29 @@ test('after the last trick advanceAfterTrick goes ROUND_SCORING -> GAME_OVER', (
   assert.equal(engine.getResult().teamPoints, 0);
 });
 
+test('last trick: a joker lead must name a suit, and the highest card of that suit wins', () => {
+  const engine = playingEngine();
+  (engine as unknown as { _trickNumber: number })._trickNumber = 10;
+  engine.state.currentTrickNumber = 10;
+  setHands(engine, [
+    [card('CLUB', 'K')],
+    [card('CLUB', '4')],
+    [card('JOKER', '2')],
+    [card('CLUB', '10')],
+    [card('CLUB', 'A')],
+  ]);
+  assert.throws(() => engine.playCard('p2', 'JOKER_2'), /joker_lead_suit_required/);
+  assert.equal(engine.state.players[2].hand.length, 1);
+  assert.deepEqual(engine.getPlayableCardIds('p2'), ['JOKER_2']);
+
+  engine.playCard('p2', 'JOKER_2', { jokerLeadSuit: 'CLUB' });
+  engine.playCard('p3', 'CLUB_10');
+  engine.playCard('p4', 'CLUB_A');
+  engine.playCard('p0', 'CLUB_K');
+  engine.playCard('p1', 'CLUB_4');
+  assert.equal(engine.state.trickHistory[0].winnerPlayerId, 'p4');
+});
+
 test('first-trick friend: the first trick winner becomes the friend', () => {
   const engine = playingEngine({ type: 'FIRST_TRICK' });
   setHands(engine, [

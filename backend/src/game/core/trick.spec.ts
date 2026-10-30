@@ -70,8 +70,9 @@ test('joker: needs a named suit to lead, cannot lead the first trick, exempt fro
   assert.equal(validatePlay({ ...lead, trickNumber: 2, jokerLeadSuit: 'STAR' }).reason, 'joker_lead_suit_required');
   assert.equal(validatePlay({ ...lead, trickNumber: 2, jokerLeadSuit: 'SPADE' }).valid, true);
   assert.equal(validatePlay({ ...lead, trickNumber: 1, jokerLeadSuit: 'SPADE' }).reason, 'joker_cannot_lead_first_trick');
-  // last trick: the joker is the only card; naming a suit is optional
-  assert.equal(validatePlay({ ...lead, hand: [j], trickNumber: 10 }).valid, true);
+  // last trick: the suit must be named too, otherwise the winner cannot be decided by rank
+  assert.equal(validatePlay({ ...lead, hand: [j], trickNumber: 10 }).reason, 'joker_lead_suit_required');
+  assert.equal(validatePlay({ ...lead, hand: [j], trickNumber: 10, jokerLeadSuit: 'SPADE' }).valid, true);
   // following: joker may be played even while holding the lead suit
   assert.equal(validatePlay({ ...base, card: j, hand, leadSuit: 'SPADE', isLeading: false, trickNumber: 5 }).valid, true);
 });

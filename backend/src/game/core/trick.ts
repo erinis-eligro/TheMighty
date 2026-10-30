@@ -24,7 +24,7 @@ export interface PlayValidation {
  * - `trickNumber` is the 1-based number of the trick being played (1..totalTricks),
  *   not a per-player turn counter.
  * - `isLeading` is true when the player opens the trick; `leadSuit` is the suit led by the
- *   leader (undefined while leading, or when a joker led the last trick without naming a suit).
+ *   leader (undefined while leading).
  * - `isJokerCallActive` means the joker call was already declared in the current trick
  *   (by the leader). Only then must the holder of the joker-call card play it.
  * - `declaresJokerCall` is the leader declaring the joker call; it requires leading with the
@@ -85,9 +85,9 @@ export function validatePlay({
       if (trickNumber === 1) {
         return { valid: false, reason: 'joker_cannot_lead_first_trick' };
       }
-      // On the last trick the joker is the leader's only card, so naming a suit is optional.
-      const needsSuit = trickNumber !== totalTricks;
-      if (jokerLeadSuit !== undefined ? !SUITS.includes(jokerLeadSuit as Suit) : needsSuit) {
+      // The leader must always name the suit to follow (also on the last trick); without a lead
+      // suit the trick winner could not be decided by rank.
+      if (jokerLeadSuit === undefined || !SUITS.includes(jokerLeadSuit as Suit)) {
         return { valid: false, reason: 'joker_lead_suit_required' };
       }
     }
