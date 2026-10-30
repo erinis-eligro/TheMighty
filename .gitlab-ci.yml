@@ -1,5 +1,5 @@
 default:
-  image: node:24-bookworm
+  image: node:20-bookworm
 
 backend-test:
   stage: test
@@ -17,6 +17,66 @@ backend-test:
     - npx prisma generate
     - npm run build
     - npm test
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+
+frontend-check:
+  stage: test
+  tags:
+    - docker
+  cache:
+    key:
+      files:
+        - frontend/package-lock.json
+    paths:
+      - frontend/node_modules/
+  script:
+    - cd frontend
+    - npm ci
+    - npm run typecheck
+    - npm run lint
+    - npm run build
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+
+# frontend/src/types/protocol.ts 는 backend/src/game/protocol.ts 의 수동 복사본이다. 어긋나면 실패시킨다.
+protocol-sync:
+  stage: test
+  tags:
+    - docker
+  script:
+    - diff backend/src/game/protocol.ts frontend/src/types/protocol.ts
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+
+# prisma 스키마 유효성 + 마이그레이션 누락 점검 (schema.prisma 를 바꾸고 migration 을 안 만들면 실패).
+prisma-check:
+  stage: test
+  tags:
+    - docker
+  services:
+    - name: postgres:15-alpine
+      alias: postgres
+  variables:
+    POSTGRES_USER: postgres
+    POSTGRES_PASSWORD: postgres
+    POSTGRES_DB: mighty
+  cache:
+    key:
+      files:
+        - backend/package-lock.json
+    paths:
+      - backend/node_modules/
+  script:
+    - cd backend
+    - npm ci
+    - export DATABASE_URL="postgresql://postgres:postgres@postgres:5432/mighty?schema=public"
+    - npx prisma validate
+    # 빈 CI DB 를 shadow DB 로 사용해 migrations 를 적용한 결과와 schema.prisma 를 비교한다. (차이가 있으면 exit 2)
+    - npx prisma migrate diff --from-migrations prisma/migrations --to-schema-datamodel prisma/schema.prisma --shadow-database-url "$DATABASE_URL" --exit-code
   rules:
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
     - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH

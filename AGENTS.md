@@ -72,7 +72,11 @@ docker compose up -d --build
 
 - 로컬 DB 접속 문자열: `postgresql://postgres:postgres@localhost:5432/mighty?schema=public` (`docker-compose.yml` 의 postgres 서비스 기준).
 - 변경 후 최소한 `backend` 는 `npm run build`, `frontend` 는 `npm run typecheck` 가 통과해야 한다.
-- 현재 저장소에는 테스트 프레임워크와 `.gitlab-ci.yml` 이 없다. 게임 로직(`core/`)을 수정하면 Jest 단위 테스트를 함께 추가한다. (테스트 환경 구축은 별도 work item)
+- 백엔드는 Jest(`npm test`), 프론트는 Playwright E2E 가 있다. 게임 로직(`core/`)을 수정하면 Jest 단위 테스트를 함께 추가한다.
+- `.gitlab-ci.yml` 은 MR/기본 브랜치 파이프라인에서 `backend-test`(build + jest), `frontend-check`(typecheck + lint + build), `protocol-sync`(`backend/src/game/protocol.ts` 와 `frontend/src/types/protocol.ts` 동일성), `prisma-check`(`prisma validate` + migration 누락 검사)를 실행한다. `frontend-e2e` 는 수동/야간 전용이다.
+- CI 이미지는 Dockerfile 과 같은 Node 20 이다. 버전을 바꿀 때는 `.gitlab-ci.yml` 과 두 Dockerfile 을 함께 맞춘다.
+- `backend/src/game/protocol.ts` 를 수정하면 `frontend/src/types/protocol.ts` 에 그대로 복사한다. (`protocol-sync` 가 검사)
+- `frontend` 의 `npm run lint` 는 `.eslintrc.json`(`next/core-web-vitals`)을 사용하며 경고 없이 통과해야 한다.
 - `backend` 의 `npm run lint`, `npm run format` 은 `--fix`/`--write` 로 파일을 수정한다. 의도하지 않은 대량 포맷 변경이 생기지 않게 변경한 파일에만 적용한다.
 
 ## 코딩 컨벤션
