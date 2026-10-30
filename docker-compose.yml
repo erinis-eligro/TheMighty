@@ -1,19 +1,18 @@
-version: "3.8"
-
 services:
   postgres:
     image: postgres:15-alpine
     container_name: mighty-postgres
     environment:
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
-      POSTGRES_DB: mighty
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      POSTGRES_DB: ${POSTGRES_DB:-mighty}
     ports:
-      - "5432:5432"
+      # 로컬 디버깅 전용: 호스트 loopback 에만 공개한다. 외부 접근이 필요하면 SSH 터널 등을 사용한다.
+      - "127.0.0.1:5432:5432"
     volumes:
       - mighty_pg_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres -d mighty"]
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER:-postgres} -d $${POSTGRES_DB:-mighty}"]
       interval: 5s
       timeout: 5s
       retries: 10
@@ -29,7 +28,7 @@ services:
       postgres:
         condition: service_healthy
     environment:
-      DATABASE_URL: "postgresql://postgres:postgres@postgres:5432/mighty?schema=public"
+      DATABASE_URL: "postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-mighty}?schema=public"
       PORT: 3001
       CORS_ORIGIN: "${CORS_ORIGIN:-http://localhost:3000}"
       PRISMA_LOG: "true"
@@ -39,6 +38,15 @@ services:
       TRICK_RESOLVED_DELAY_MS: "${TRICK_RESOLVED_DELAY_MS:-}"
     ports:
       - "3001:3001"
+    healthcheck:
+      # 이미지에 curl 이 없어 busybox wget 을 쓴다. localhost 가 ::1 로 풀리는 것을 피하려 127.0.0.1 사용.
+      # /stats/:username 은 DB 조회(읽기 전용)를 하므로 DB 연결까지 함께 확인된다.
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:3001/stats/healthcheck || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      # 시작 시 `prisma migrate deploy` 가 먼저 실행되므로 넉넉히 잡는다.
+      start_period: 60s
     restart: unless-stopped
 
   frontend:
@@ -51,9 +59,10 @@ services:
     container_name: mighty-frontend
     depends_on:
       backend:
-        condition: service_started
+        condition: service_healthy
     environment:
       PORT: 3000
+      HOSTNAME: 0.0.0.0
     ports:
       - "3000:3000"
     restart: unless-stopped
