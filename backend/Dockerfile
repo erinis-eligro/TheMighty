@@ -23,7 +23,6 @@ RUN apk add --no-cache openssl ca-certificates && update-ca-certificates
 WORKDIR /app
 ENV NODE_ENV=production
 ENV PORT=3001
-ENV DATABASE_URL="postgresql://postgres:postgres@postgres:5432/mighty?schema=public"
 
 RUN addgroup --system --gid 1001 nodejs
 RUN adduser --system --uid 1001 nestjs
