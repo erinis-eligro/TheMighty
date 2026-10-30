@@ -7,7 +7,6 @@ import { sortHand } from '@/lib/cards';
 import { useGameStore, type Card as CardType, type Suit } from '@/store/useGameStore';
 
 const LEAD_SUITS: Suit[] = ['SPADE', 'DIAMOND', 'HEART', 'CLUB'];
-const TOTAL_TRICKS = 10;
 
 /** A card the player clicked that needs one more decision before it is sent. */
 type Pending = { card: CardType; kind: 'JOKER_SUIT' | 'JOKER_CALL' };
@@ -37,7 +36,6 @@ export function UserHand() {
   const isJokerCallActive = useGameStore((s) => s.isJokerCallActive);
   const jokerCallCard = useGameStore((s) => s.jokerCallCard);
   const currentTrick = useGameStore((s) => s.currentTrick);
-  const currentTrickNumber = useGameStore((s) => s.currentTrickNumber);
   const [pending, setPending] = useState<Pending | null>(null);
   const [armedId, setArmedId] = useState<string | null>(null);
   const coarse = useCoarsePointer();
@@ -71,7 +69,7 @@ export function UserHand() {
     }
     setArmedId(null);
     // The server validates everything; these prompts only collect the extra choices of a leader.
-    if (isLeading && card.isJoker && currentTrickNumber !== TOTAL_TRICKS) {
+    if (isLeading && card.isJoker) {
       setPending({ card, kind: 'JOKER_SUIT' });
     } else if (isLeading && isCallCard(card)) {
       setPending({ card, kind: 'JOKER_CALL' });
