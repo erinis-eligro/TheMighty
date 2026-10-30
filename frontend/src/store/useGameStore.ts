@@ -1,17 +1,14 @@
 import { create } from 'zustand';
-import type { Socket } from 'socket.io-client';
-import { createGameSocket, emitWithAck } from '@/lib/socket';
+import { createGameSocket, emitWithAck, type GameSocket } from '@/lib/socket';
 import { clearSession, loadSession, saveSession } from '@/lib/session';
 import type {
-  CreateRoomAckData,
+  ClientToServerEvents,
   DeclareFriendRequest,
   ExchangeKittyRequest,
-  GameErrorPayload,
   PlaceBidRequest,
   PlayCardRequest,
-  RoomAckData,
 } from '@/types/protocol';
-import { SESSION_FAILED_CODE } from '@/types/protocol';
+import { GAME_EVENTS, SESSION_FAILED_CODE } from '@/types/protocol';
 
 export type Card = {
   id: string;
@@ -103,7 +100,7 @@ type SyncedState = Pick<
 >;
 
 interface GameState {
-  socket: Socket | null;
+  socket: GameSocket<SyncedState> | null;
   roomId: string;
   playerId: string;
   username: string;
@@ -144,7 +141,7 @@ interface GameState {
   /** The server gave up on this game (fatal `game_error`): the only way out is a new game or the lobby. */
   sessionFailed: boolean;
 
-  setSocket: (socket: Socket) => void;
+  setSocket: (socket: GameSocket<SyncedState>) => void;
   /** The one place that creates the game socket and registers the server event listeners. */
   connect: (url?: string) => void;
   /** Reconnect manually after the automatic retries gave up or the user asks for it. */
@@ -171,12 +168,12 @@ interface GameState {
 async function sendAction(
   get: () => GameState,
   set: (partial: Partial<GameState>) => void,
-  event: string,
-  action: object,
+  event: typeof GAME_EVENTS.PLACE_BID | typeof GAME_EVENTS.EXCHANGE_KITTY | typeof GAME_EVENTS.DECLARE_FRIEND | typeof GAME_EVENTS.PLAY_CARD,
+  action: Omit<Parameters<ClientToServerEvents[typeof event]>[0], 'roomId' | 'playerId'>,
 ): Promise<boolean> {
   const { socket, roomId } = get();
   if (!socket || !roomId) return false;
-  const res = await emitWithAck<RoomAckData>(socket, event, { roomId, ...action });
+  const res = await emitWithAck(socket, event, { roomId, ...action } as Parameters<ClientToServerEvents[typeof event]>[0]);
   set({ error: res.ok ? null : res.error.message });
   return res.ok;
 }
@@ -216,7 +213,7 @@ export const useGameStore = create<GameState>((set, get) => ({
   setSocket: (socket) => set({ socket }),
   connect: (url) => {
     if (get().socket) return;
-    const socket = createGameSocket(url);
+    const socket = createGameSocket<SyncedState>(url);
     socket.on('connect', () => {
       set({ isConnected: true, connectionError: null });
       // The server unbinds the seat on disconnect: take it back after an automatic reconnect.
@@ -224,14 +221,14 @@ export const useGameStore = create<GameState>((set, get) => ({
     });
     socket.on('disconnect', () => set({ isConnected: false }));
     socket.on('connect_error', (err) => set({ isConnected: false, connectionError: err.message }));
-    socket.on('game_error', (e: GameErrorPayload) =>
+    socket.on(GAME_EVENTS.GAME_ERROR, (e) =>
       set(e.code === SESSION_FAILED_CODE ? { sessionFailed: true, error: null } : { error: e.message }),
     );
-    socket.on('room_created', (data: { roomId: string; playerId: string }) =>
+    socket.on(GAME_EVENTS.ROOM_CREATED, (data) =>
       set({ roomId: data.roomId, playerId: data.playerId, phase: 'READY' }),
     );
     // The server state is the single source of truth: it replaces the whole game view.
-    socket.on('state_sync', (data: SyncedState) =>
+    socket.on(GAME_EVENTS.STATE_SYNC, (data) =>
       set({
         ...data,
         friendRevealed: data.friendRevealed ?? false,
@@ -240,7 +237,7 @@ export const useGameStore = create<GameState>((set, get) => ({
         result: data.result ?? null,
       }),
     );
-    socket.on('player_left', (data: { playerId: string }) =>
+    socket.on(GAME_EVENTS.PLAYER_LEFT, (data) =>
       set((s) => ({ players: s.players.filter((p) => p.id !== data.playerId) })),
     );
     set({ socket });
@@ -260,7 +257,7 @@ export const useGameStore = create<GameState>((set, get) => ({
     const { socket } = get();
     if (!socket) return false;
     get().reset();
-    const res = await emitWithAck<CreateRoomAckData>(socket, 'create_room', { username });
+    const res = await emitWithAck(socket, GAME_EVENTS.CREATE_ROOM, { username });
     if (!res.ok) {
       set({ error: res.error.message });
       return false;
@@ -273,7 +270,7 @@ export const useGameStore = create<GameState>((set, get) => ({
     const { socket } = get();
     const saved = loadSession();
     if (!socket || !saved || (roomId && saved.roomId !== roomId)) return false;
-    const res = await emitWithAck<RoomAckData>(socket, 'join_room', {
+    const res = await emitWithAck(socket, GAME_EVENTS.JOIN_ROOM, {
       roomId: saved.roomId,
       rejoinToken: saved.rejoinToken,
     });
@@ -287,15 +284,15 @@ export const useGameStore = create<GameState>((set, get) => ({
   },
   leaveRoom: () => {
     const { socket, roomId, playerId } = get();
-    if (socket && roomId) socket.emit('leave_room', playerId ? { roomId, playerId } : { roomId });
+    if (socket && roomId) socket.emit(GAME_EVENTS.LEAVE_ROOM, playerId ? { roomId, playerId } : { roomId });
     clearSession();
     get().reset();
     set({ roomId: '', playerId: '' });
   },
-  placeBid: (action) => sendAction(get, set, 'place_bid', action),
-  exchangeKitty: (action) => sendAction(get, set, 'exchange_kitty', action),
-  declareFriend: (action) => sendAction(get, set, 'declare_friend', action),
-  playCard: (action) => sendAction(get, set, 'play_card', action),
+  placeBid: (action) => sendAction(get, set, GAME_EVENTS.PLACE_BID, action),
+  exchangeKitty: (action) => sendAction(get, set, GAME_EVENTS.EXCHANGE_KITTY, action),
+  declareFriend: (action) => sendAction(get, set, GAME_EVENTS.DECLARE_FRIEND, action),
+  playCard: (action) => sendAction(get, set, GAME_EVENTS.PLAY_CARD, action),
   setRoom: (roomId, playerId, username) => set({ roomId, playerId, username }),
   setError: (error) => set({ error }),
   reset: () => set({

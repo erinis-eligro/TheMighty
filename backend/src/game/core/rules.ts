@@ -43,7 +43,7 @@ export function isJokerCard(card: { suit: string; isJoker?: boolean }): boolean 
 }
 
 export function isPointCard(card: { rank: string }): boolean {
-  return POINT_RANKS.includes(card.rank as any);
+  return (POINT_RANKS as readonly string[]).includes(card.rank);
 }
 
 export function getPointValue(card: { rank: string }): number {

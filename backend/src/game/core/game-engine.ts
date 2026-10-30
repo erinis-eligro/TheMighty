@@ -32,7 +32,7 @@ export type { GamePhase };
 
 export interface EngineOptions {
   players: Player[];
-  giruda: string;
+  giruda: BidGiruda;
 }
 
 const FIRST_BIDDER_INDEX = 0;
@@ -84,7 +84,7 @@ export class GameEngine {
       leadSuit: null,
       isJokerCallActive: false,
       kitty: [],
-      giruda: giruda as any,
+      giruda,
       // The president (owner) is decided by bidding, not by who created the room.
       ownerPlayerId: '',
       presidentIndex: null,
@@ -776,7 +776,7 @@ export class GameEngine {
 export function createInitialGameState(
   roomId: string,
   players: Player[],
-  giruda: string
+  giruda: BidGiruda
 ): GameState {
   const engine = new GameEngine({ players, giruda });
   engine.state.roomId = roomId;

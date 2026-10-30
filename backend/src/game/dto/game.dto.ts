@@ -1,6 +1,5 @@
-import { IsString, IsUUID, IsNumber, IsBoolean, IsOptional, IsArray, ValidateNested, IsIn, IsEnum, MinLength, MaxLength } from 'class-validator';
-import { Transform, Type } from 'class-transformer';
-import { Role, Giruda } from '@prisma/client';
+import { IsString, IsUUID, IsNumber, IsBoolean, IsOptional, IsArray, IsIn, MinLength, MaxLength } from 'class-validator';
+import { Transform } from 'class-transformer';
 
 export class CreateRoomDto {
   /** Display/stats nickname; trimmed. Identity of the session is the rejoin token, not the nickname. */
@@ -149,69 +148,3 @@ export class PlayCardDto {
   @IsOptional()
   jokerLeadSuit?: string;
 }
-
-export class GameStateDto {
-  @IsString()
-  roomId!: string;
-
-  @IsString()
-  phase!: string;
-
-  @IsString()
-  turnplayerId!: string;
-
-  @IsNumber()
-  currentTurnIndex!: number;
-
-  @IsNumber()
-  currentTrickNumber!: number;
-
-  @IsNumber()
-  passCount!: number;
-
-  @IsArray()
-  @ValidateNested({ each: true })
-  @Type(() => Object)
-  players!: any[];
-
-  @IsOptional()
-  @ValidateNested()
-  @Type(() => Object)
-  currentTrick?: any;
-
-  @IsArray()
-  @ValidateNested({ each: true })
-  @Type(() => Object)
-  trickHistory!: any[];
-
-  @IsArray()
-  @ValidateNested({ each: true })
-  @Type(() => Object)
-  kitty!: any[];
-
-  @IsEnum(Giruda, { each: false, message: 'giruda must be a valid giruda value' })
-  giruda!: Giruda;
-
-  @IsString()
-  ownerplayerId!: string;
-
-  @IsString()
-  @IsOptional()
-  friendPlayerId?: string;
-
-  @IsNumber()
-  currentBid!: number;
-
-  @IsString()
-  @IsOptional()
-  bidLeader?: string;
-}
-
-export class ErrorDto {
-  @IsString()
-  code!: string;
-
-  @IsString()
-  message!: string;
-}
-
