@@ -287,7 +287,7 @@ export const useGameStore = create<GameState>((set, get) => ({
   },
   leaveRoom: () => {
     const { socket, roomId, playerId } = get();
-    if (socket && roomId) socket.emit('leave_room', { roomId, playerId });
+    if (socket && roomId) socket.emit('leave_room', playerId ? { roomId, playerId } : { roomId });
     clearSession();
     get().reset();
     set({ roomId: '', playerId: '' });

@@ -3,7 +3,12 @@ import type { Server, Socket } from 'socket.io';
 import { GameGateway } from './game.gateway';
 import { GameService } from './game.service';
 import { PrismaService } from '../prisma/prisma.service';
-import { GAME_EVENTS, SESSION_TTL_MS } from './constants';
+import 'reflect-metadata';
+import { Logger, ValidationPipe, type ArgumentsHost } from '@nestjs/common';
+import { WsException } from '@nestjs/websockets';
+import { GAME_EVENTS, FINISHED_SESSION_TTL_MS, SESSION_TTL_MS } from './constants';
+import { GameWsExceptionFilter } from './game-ws-exception.filter';
+import { GameRuleError } from './core';
 import { SESSION_FAILED_CODE } from './protocol';
 
 type Emit = { room: string; event: string; payload: unknown };
@@ -53,7 +58,9 @@ describe('Auto Turn Driver', () => {
     assert.equal(managed.engine.state.trickHistory.length, 10);
     assert.equal(managed.aiTimers.size, 0);
     assert.equal(managed.resolveTimer, undefined);
-    assert.equal(jest.getTimerCount(), 0);
+    // only the cleanup timer of the finished session is left
+    assert.equal(jest.getTimerCount(), 1);
+    assert.ok(managed.finishedTimer);
   });
 
   test('waits for the human on his turn instead of acting for him', () => {
@@ -301,10 +308,6 @@ describe('Information hiding and identity', () => {
     const payload = client.emit.mock.calls.find((c) => c[0] === GAME_EVENTS.STATE_SYNC)![1];
     assert.deepEqual(handsOf(payload.players).map((p: any) => p.id), [playerId]);
 
-    const stranger = makeClient('sock-x');
-    gateway.handleGetState(stranger, { roomId });
-    const strangerPayload = stranger.emit.mock.calls.find((c) => c[0] === GAME_EVENTS.STATE_SYNC)![1];
-    assert.equal(handsOf(strangerPayload.players).length, 0);
   });
 
   test('a socket cannot act as another player, and playerId may be omitted', () => {
@@ -443,6 +446,123 @@ describe('Session lifecycle', () => {
     gateway.handleDisconnect(client);
     assert.equal(service.findSession(roomId)!.humanSocketId, 'sock-2');
     assert.equal(service.findSession(roomId)!.expiryTimer, undefined);
+  });
+});
+
+describe('Input validation and error masking', () => {
+  const makeClient = (id: string) =>
+    ({ id, join: jest.fn(), leave: jest.fn(), emit: jest.fn() }) as unknown as Socket & { emit: jest.Mock };
+  const pipe = new ValidationPipe({ whitelist: true, transform: true });
+  const validate = (method: keyof GameGateway, value: unknown) => {
+    const types = Reflect.getMetadata('design:paramtypes', GameGateway.prototype, method as string) as unknown[];
+    return pipe.transform(value, { type: 'body', metatype: types[1] as new () => unknown });
+  };
+  const hostFor = (client: unknown, ack: unknown) =>
+    ({ getArgs: () => [client, undefined, ack, 'x'], switchToWs: () => ({ getClient: () => client }) }) as unknown as ArgumentsHost;
+
+  beforeEach(() => jest.useFakeTimers());
+  afterEach(() => jest.useRealTimers());
+
+  test.each(['handleStartGame', 'handleGetState', 'handleLeaveRoom'] as const)(
+    '%s validates its payload with a DTO (omitted payload, non-UUID roomId)',
+    async (method) => {
+      await assert.rejects(async () => validate(method, undefined));
+      await assert.rejects(async () => validate(method, {}));
+      await assert.rejects(async () => validate(method, { roomId: 'not-a-uuid' }));
+      await assert.rejects(async () => validate(method, { roomId: 42 }));
+      const roomId = '11111111-1111-4111-8111-111111111111';
+      await assert.doesNotReject(async () => validate(method, { roomId }));
+    }
+  );
+
+  test('leave_room rejects a malformed playerId', async () => {
+    const roomId = '11111111-1111-4111-8111-111111111111';
+    await assert.rejects(async () => validate('handleLeaveRoom', { roomId, playerId: 5 }));
+  });
+
+  test('get_state is only allowed for the socket bound to the room', () => {
+    const { gateway, service } = setup();
+    const owner = makeClient('sock-1');
+    const { roomId } = (gateway.handleCreateRoom(owner, { username: 'human' }) as { data: { roomId: string } }).data;
+    owner.emit.mockClear();
+    assert.equal(gateway.handleGetState(owner, { roomId }).ok, true);
+    assert.equal(owner.emit.mock.calls.filter((c) => c[0] === GAME_EVENTS.STATE_SYNC).length, 1);
+
+    const stranger = makeClient('sock-x');
+    assert.throws(() => gateway.handleGetState(stranger, { roomId }), /not bound/);
+    assert.equal(stranger.emit.mock.calls.length, 0);
+    assert.ok(service.findSession(roomId));
+  });
+
+  test('the filter masks unexpected errors but keeps rule violations', () => {
+    const client = { emit: jest.fn() };
+    const ack = jest.fn();
+    const filter = new GameWsExceptionFilter();
+    const errorLog = jest.spyOn(Logger.prototype, 'error').mockImplementation(() => undefined);
+    jest.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
+
+    filter.catch(new TypeError("Cannot read properties of undefined (reading 'roomId')"), hostFor(client, ack));
+    assert.deepEqual(ack.mock.calls[0][0], {
+      ok: false,
+      error: { code: 'INTERNAL_ERROR', message: 'Internal server error' },
+    });
+    assert.deepEqual(client.emit.mock.calls[0][1], { code: 'INTERNAL_ERROR', message: 'Internal server error' });
+    // the original message only reaches the server log
+    assert.match(String(errorLog.mock.calls[0][0]), /Cannot read properties of undefined/);
+
+    filter.catch(new GameRuleError('Not in bidding phase'), hostFor(client, ack));
+    assert.deepEqual(ack.mock.calls[1][0], { ok: false, error: { code: 'GAME_ERROR', message: 'Not in bidding phase' } });
+    jest.restoreAllMocks();
+  });
+
+  test('engine rule violations are GameRuleErrors, so the client still sees them', () => {
+    const { gateway, client } = setup();
+    const { roomId } = (gateway.handleCreateRoom(client, { username: 'human' }) as { data: { roomId: string } }).data;
+    // the game was not started: bidding is not open
+    assert.throws(
+      () => gateway.handlePlaceBid(client, { roomId, pass: true }),
+      (e: unknown) => e instanceof GameRuleError && e.message === 'Not in bidding phase'
+    );
+  });
+
+  test('the number of sessions is capped', () => {
+    process.env.MAX_SESSIONS = '2';
+    try {
+      const { gateway, service } = setup();
+      gateway.handleCreateRoom(makeClient('a'), { username: 'a' });
+      gateway.handleCreateRoom(makeClient('b'), { username: 'b' });
+      assert.throws(
+        () => gateway.handleCreateRoom(makeClient('c'), { username: 'c' }),
+        (e: unknown) => (e as WsException).getError().valueOf() !== undefined && /Too many games/.test(JSON.stringify((e as WsException).getError()))
+      );
+      // a socket that already holds a session may start a new game: its old one is replaced
+      assert.doesNotThrow(() => gateway.handleCreateRoom(makeClient('a'), { username: 'a2' }));
+      assert.equal(service.hasCapacity(), false);
+    } finally {
+      delete process.env.MAX_SESSIONS;
+    }
+  });
+
+  test('a finished game is removed after the TTL, even if the human stays connected', () => {
+    const { service, emitted, managed, roomId } = startAllAiGame();
+    for (let i = 0; i < 2000 && managed.engine.state.phase !== 'GAME_OVER'; i++) jest.advanceTimersByTime(500);
+    assert.equal(emitted.filter((e) => e.event === GAME_EVENTS.GAME_END).length, 1);
+    assert.ok(service.findSession(roomId));
+    // the polling loop above may have overshot GAME_OVER by up to 500ms
+    jest.advanceTimersByTime(FINISHED_SESSION_TTL_MS - 600);
+    assert.ok(service.findSession(roomId));
+    jest.advanceTimersByTime(600);
+    assert.equal(service.findSession(roomId), undefined);
+    assert.equal(jest.getTimerCount(), 0);
+  });
+
+  test('leaving a finished game clears its cleanup timer', () => {
+    const { gateway, service, client, managed, roomId } = startAllAiGame();
+    for (let i = 0; i < 2000 && managed.engine.state.phase !== 'GAME_OVER'; i++) jest.advanceTimersByTime(500);
+    assert.ok(managed.finishedTimer);
+    gateway.handleLeaveRoom(client, { roomId });
+    assert.equal(service.findSession(roomId), undefined);
+    assert.equal(jest.getTimerCount(), 0);
   });
 });
 

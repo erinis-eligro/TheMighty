@@ -3,7 +3,7 @@ import { randomUUID, timingSafeEqual } from 'crypto';
 import { PrismaService } from '../prisma/prisma.service';
 import { Role, Giruda } from '@prisma/client';
 import { GameSession, Player } from './entities/game.entity';
-import { SEAT_POSITIONS, SESSION_TTL_MS } from './constants';
+import { FINISHED_SESSION_TTL_MS, SEAT_POSITIONS, SESSION_TTL_MS, getMaxSessions } from './constants';
 import { GameEngine, generateAiName } from './core';
 
 export interface UserStats {
@@ -42,6 +42,11 @@ export class GameService implements OnModuleDestroy {
 
   onModuleDestroy(): void {
     for (const id of [...this.sessions.keys()]) this.deleteSession(id);
+  }
+
+  /** Whether another session may be created (total session count is capped). */
+  hasCapacity(): boolean {
+    return this.sessions.size < getMaxSessions();
   }
 
   /** Creates a single-player session: the human at `bottom` plus 4 AI players. */
@@ -145,6 +150,23 @@ export class GameService implements OnModuleDestroy {
     }, ttlMs);
   }
 
+  /** Drops a finished game's session after `ttlMs` so it does not stay in memory forever. */
+  scheduleFinishedCleanup(session: GameSession, ttlMs = FINISHED_SESSION_TTL_MS): void {
+    this.cancelFinishedCleanup(session);
+    session.finishedTimer = setTimeout(() => {
+      session.finishedTimer = undefined;
+      this.logger.log(`Session ${session.id} removed (game finished)`);
+      this.deleteSession(session.id);
+    }, ttlMs);
+  }
+
+  private cancelFinishedCleanup(session: GameSession): void {
+    if (session.finishedTimer) {
+      clearTimeout(session.finishedTimer);
+      session.finishedTimer = undefined;
+    }
+  }
+
   private cancelExpiry(session: GameSession): void {
     if (session.expiryTimer) {
       clearTimeout(session.expiryTimer);
@@ -159,6 +181,7 @@ export class GameService implements OnModuleDestroy {
     session.finished = true;
     this.clearGameTimers(session);
     this.cancelExpiry(session);
+    this.cancelFinishedCleanup(session);
     this.sessions.delete(roomId);
     this.logger.log(`Session ${roomId} deleted`);
   }

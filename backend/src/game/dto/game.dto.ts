@@ -22,6 +22,30 @@ export class JoinRoomDto {
   rejoinToken!: string;
 }
 
+export class StartGameDto {
+  @IsString()
+  @IsUUID()
+  roomId!: string;
+}
+
+export class GetStateDto {
+  @IsString()
+  @IsUUID()
+  roomId!: string;
+}
+
+export class LeaveRoomDto {
+  @IsString()
+  @IsUUID()
+  roomId!: string;
+
+  /** Ignored for identity: the server uses the player bound to the socket. If sent, it must match. */
+  @IsString()
+  @IsUUID()
+  @IsOptional()
+  playerId?: string;
+}
+
 export class PlaceBidDto {
   @IsString()
   @IsUUID()

@@ -161,5 +161,7 @@ export interface GameSession {
   resolveTimer?: NodeJS.Timeout;
   /** Deletes the session if the human does not come back within SESSION_TTL_MS after a disconnect. */
   expiryTimer?: NodeJS.Timeout;
+  /** Deletes a finished session after FINISHED_SESSION_TTL_MS; unlike expiryTimer a rejoin does not cancel it. */
+  finishedTimer?: NodeJS.Timeout;
   createdAt: Date;
 }

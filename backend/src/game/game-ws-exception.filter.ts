@@ -2,6 +2,7 @@ import { ArgumentsHost, Catch, ExceptionFilter, HttpException, Logger } from '@n
 import { WsException } from '@nestjs/websockets';
 import { Socket } from 'socket.io';
 import { GAME_EVENTS } from './constants';
+import { GameRuleError } from './core/errors';
 import type { Ack, AckError, GameErrorPayload } from './protocol';
 
 function toAckError(exception: unknown): AckError {
@@ -19,9 +20,9 @@ function toAckError(exception: unknown): AckError {
     const status = exception.getStatus();
     return { code: status === 400 ? 'VALIDATION_ERROR' : status === 404 ? 'NOT_FOUND' : 'HTTP_ERROR', message };
   }
-  if (exception instanceof Error) {
-    // Game-rule violations thrown by the engine (e.g. "Not your turn").
-    return { code: 'GAME_ERROR', message: exception.message };
+  if (exception instanceof GameRuleError) {
+    // Game-rule violations thrown by the engine (e.g. "Not your turn"): the message is for the client.
+    return { code: exception.code, message: exception.message };
   }
   return { code: 'INTERNAL_ERROR', message: 'Internal server error' };
 }
@@ -42,7 +43,15 @@ export class GameWsExceptionFilter implements ExceptionFilter {
     const ack = [...args].reverse().find((a): a is (res: Ack) => void => typeof a === 'function');
 
     const error = toAckError(exception);
-    this.logger.warn(`${error.code}: ${error.message}`);
+    if (error.code === 'INTERNAL_ERROR') {
+      // Anything unexpected is a server bug: the client only gets a generic message, the log the original.
+      this.logger.error(
+        exception instanceof Error ? `Unhandled exception: ${exception.message}` : `Unhandled exception: ${String(exception)}`,
+        exception instanceof Error ? exception.stack : undefined
+      );
+    } else {
+      this.logger.warn(`${error.code}: ${error.message}`);
+    }
 
     const payload: GameErrorPayload = error;
     client.emit(GAME_EVENTS.GAME_ERROR, payload);

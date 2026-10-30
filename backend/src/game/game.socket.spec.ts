@@ -385,11 +385,18 @@ describe('GameGateway over real sockets', () => {
     const spoof = (await socket.emitWithAck(GAME_EVENTS.PLACE_BID, { roomId: room.roomId, playerId: '11111111-1111-4111-8111-111111111111', pass: true })) as Ack;
     assert.equal(spoof.error?.code, 'INVALID_PLAYER');
 
-    // a foreign socket is bound to no player, so it sees every hand masked
-    const foreignState = new Promise<StateSync>((resolve) => intruder.once(GAME_EVENTS.STATE_SYNC, resolve));
-    await intruder.emitWithAck(GAME_EVENTS.GET_STATE, { roomId: room.roomId });
-    const view = await foreignState;
-    assertMasked(view, 'nobody');
+    // a foreign socket may not read the state of a room it is not bound to
+    const foreignState = (await intruder.emitWithAck(GAME_EVENTS.GET_STATE, { roomId: room.roomId })) as Ack;
+    assert.equal(foreignState.ok, false);
+    assert.equal(foreignState.error?.code, 'INVALID_PLAYER');
+
+    // missing payloads are validation errors, never internal messages
+    for (const event of [GAME_EVENTS.GET_STATE, GAME_EVENTS.START_GAME, GAME_EVENTS.LEAVE_ROOM]) {
+      const ack = (await socket.emitWithAck(event)) as Ack;
+      assert.equal(ack.ok, false, `${event} without a payload must fail`);
+      assert.equal(ack.error?.code, 'VALIDATION_ERROR');
+      assert.doesNotMatch(ack.error?.message ?? '', /Cannot read properties/);
+    }
 
     // nothing changed: it is still the human's bid
     const own = new Promise<StateSync>((resolve) => socket.once(GAME_EVENTS.STATE_SYNC, resolve));
