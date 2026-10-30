@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { Card, Player } from '../entities/game.entity';
 import { GameEngine } from './game-engine';
 import { selectBid, selectCardToPlay, selectKittyDiscard, selectFriendDeclaration, estimateHandScore } from './ai';
+import { findVoidSuits, trickBeatenRisk, estimateOppositionGiruda, unseenCards } from './ai-knowledge';
 import { getMightyCard, getJokerCallCard, isMightyCard, MAX_BID, MIN_BID, TOTAL_TRICKS } from './rules';
 
 function makePlayers(): Player[] {
@@ -79,11 +80,7 @@ function playAiGame(): { engine: GameEngine; revealedFriend: boolean } {
       jokerCallCard: engine.jokerCallCard,
       restrictGirudaLead: engine.restrictsGirudaLead(),
       isJokerCallActive: engine.state.isJokerCallActive,
-      context: {
-        role: engine.getTeamRole(turn.id),
-        playedCards: engine.getPlayedCards(),
-        friendDeclaration: engine.state.friendDeclaration,
-      },
+      context: engine.getAiPlayContext(turn.id),
     });
     engine.playCard(turn.id, d.cardId, { jokerCall: d.jokerCall, jokerLeadSuit: d.jokerLeadSuit });
   }
@@ -297,6 +294,390 @@ describe('AI play: teams and card counting', () => {
       context: { role: 'OPPOSITION' },
     });
     assert.equal(d.cardId, side.id);
+  });
+});
+
+describe('AI play: partner safety, void tracking, giruda draining (#33)', () => {
+  const base = {
+    giruda: 'HEART',
+    totalTricks: TOTAL_TRICKS,
+    mightyCard: getMightyCard('HEART'),
+    jokerCallCard: getJokerCallCard('HEART'),
+  };
+  const play = (playerId: string, c: Card) => ({ playerId, card: c });
+  const hearts = (...ranks: Card['rank'][]) => ranks.map((r) => card('HEART', r));
+
+  test('a friend with the mighty does not dump low when the president\'s J can still be beaten', () => {
+    const mighty = card('SPADE', 'A');
+    const low = card('DIAMOND', '4');
+    const d = selectCardToPlay({
+      ...base,
+      hand: [mighty, low, card('DIAMOND', '5')],
+      leadSuit: 'DIAMOND',
+      trickNumber: 3,
+      currentTrickPlays: [play('p0', card('DIAMOND', 'J'))],
+      isPartnerWinningCurrentTrick: true,
+      context: {
+        role: 'FRIEND',
+        friendDeclaration: { type: 'MIGHTY' },
+        friendRevealed: false,
+        playersBehind: ['p2', 'p3', 'p4'],
+        knownAllyIds: ['p0'],
+      },
+    });
+    assert.equal(d.cardId, mighty.id);
+    assert.equal(d.reason, 'secure_partner_trick');
+  });
+
+  test('a friend dumps low when the partner\'s trick is safe enough without points at stake', () => {
+    const low = card('DIAMOND', '4');
+    const d = selectCardToPlay({
+      ...base,
+      hand: [card('SPADE', 'A'), low],
+      leadSuit: 'DIAMOND',
+      trickNumber: 3,
+      currentTrickPlays: [play('p0', card('DIAMOND', '9'))],
+      isPartnerWinningCurrentTrick: true,
+      context: { role: 'FRIEND', playersBehind: ['p2', 'p3', 'p4'], knownAllyIds: ['p0'], rng: () => 0 },
+    });
+    assert.equal(d.cardId, low.id);
+  });
+
+  test('last to play with the partner winning: feeds a point card (also for the owner team)', () => {
+    const k = card('DIAMOND', 'K');
+    const d = selectCardToPlay({
+      ...base,
+      hand: [k, card('DIAMOND', '3')],
+      leadSuit: 'DIAMOND',
+      trickNumber: 4,
+      currentTrickPlays: [play('a', card('DIAMOND', '4')), play('p0', card('DIAMOND', 'Q')), play('b', card('DIAMOND', '5')), play('c', card('DIAMOND', '6'))],
+      isPartnerWinningCurrentTrick: true,
+      context: { role: 'FRIEND', playersBehind: [], knownAllyIds: ['p0'] },
+    });
+    assert.equal(d.cardId, k.id);
+    assert.equal(d.reason, 'feed_partner');
+  });
+
+  describe('opposition feeding a fellow opposition player', () => {
+    const lead = (playersBehind: string[], plays: ReturnType<typeof play>[], friendRevealed: boolean, extra = {}) => {
+      const k = card('DIAMOND', 'K');
+      const low = card('DIAMOND', '3');
+      const d = selectCardToPlay({
+        ...base,
+        hand: [k, low],
+        leadSuit: 'DIAMOND',
+        trickNumber: 4,
+        currentTrickPlays: plays,
+        isPartnerWinningCurrentTrick: true,
+        context: {
+          role: 'OPPOSITION',
+          friendRevealed,
+          friendDeclaration: { type: 'NO_FRIEND' },
+          playersBehind,
+          knownAllyIds: ['o2'],
+          rng: () => 0,
+          ...extra,
+        },
+      });
+      return { d, k, low };
+    };
+
+    test('feeds when it is last and the team is known', () => {
+      const plays = [play('x', card('DIAMOND', '4')), play('o2', card('DIAMOND', 'Q')), play('y', card('DIAMOND', '5')), play('z', card('DIAMOND', '6'))];
+      const { d, k } = lead([], plays, true);
+      assert.equal(d.cardId, k.id);
+    });
+
+    test('does not feed when somebody behind can still turn the trick over', () => {
+      const plays = [play('o2', card('DIAMOND', '9'))];
+      const { d, low } = lead(['x', 'y', 'z'], plays, true);
+      assert.equal(d.cardId, low.id);
+      assert.equal(d.reason, 'partner_winning_dump');
+    });
+
+    test('does not feed before the friend is revealed', () => {
+      const plays = [play('x', card('DIAMOND', '4')), play('o2', card('DIAMOND', 'Q')), play('y', card('DIAMOND', '5')), play('z', card('DIAMOND', '6'))];
+      const { d, k } = lead([], plays, false);
+      // The partner is unknown, so the AI plays its own trick (it can still win it) instead of feeding.
+      assert.notEqual(d.reason, 'feed_partner');
+      assert.equal(d.cardId, k.id);
+    });
+
+    test('never feeds the mighty, the joker or the joker call card', () => {
+      const mighty = card('SPADE', 'A');
+      const call = card('CLUB', '3');
+      const d = selectCardToPlay({
+        ...base,
+        hand: [mighty, joker(), call],
+        leadSuit: 'DIAMOND',
+        trickNumber: 4,
+        currentTrickPlays: [play('x', card('DIAMOND', '4')), play('o2', card('DIAMOND', 'Q')), play('y', card('DIAMOND', '5')), play('z', card('DIAMOND', '6'))],
+        isPartnerWinningCurrentTrick: true,
+        context: { role: 'OPPOSITION', friendRevealed: true, playersBehind: [], knownAllyIds: ['o2'] },
+      });
+      assert.notEqual(d.reason, 'feed_partner');
+    });
+
+    test('does not give points to a trick the owner team is winning', () => {
+      const k = card('DIAMOND', 'K');
+      const low = card('DIAMOND', '3');
+      const d = selectCardToPlay({
+        ...base,
+        hand: [k, low],
+        leadSuit: 'DIAMOND',
+        trickNumber: 4,
+        currentTrickPlays: [play('p0', getMightyCardInstance())],
+        isPartnerWinningCurrentTrick: false,
+        context: { role: 'OPPOSITION', friendRevealed: true, rng: () => 0 },
+      });
+      assert.equal(d.cardId, low.id);
+    });
+  });
+
+  describe('void tracking', () => {
+    const tricks = [
+      {
+        leadSuit: 'DIAMOND',
+        cards: [play('p0', card('DIAMOND', '5')), play('p1', card('CLUB', '4')), play('p2', card('SPADE', 'A')), play('p3', joker()), play('p4', card('DIAMOND', '9'))],
+      },
+    ];
+
+    test('a player who did not follow is void in the lead suit; mighty/joker/leader prove nothing', () => {
+      const voids = findVoidSuits(tricks, 'HEART');
+      assert.ok(voids.get('p1')?.has('DIAMOND'));
+      assert.equal(voids.has('p0'), false);
+      assert.equal(voids.has('p2'), false);
+      assert.equal(voids.has('p3'), false);
+      assert.equal(voids.has('p4'), false);
+    });
+
+    test('a void player is assumed able to cut with the giruda', () => {
+      const best = card('DIAMOND', 'A');
+      const unseen = [card('HEART', '9'), ...(['2', '3', '4', '5'] as const).map((r) => card('DIAMOND', r)), ...Array.from({ length: 7 }, () => card('CLUB', '2'))];
+      const common = { bestCard: best, leadSuit: 'DIAMOND', giruda: 'HEART', jokerPowerless: false, unseen, cardsPerOpponent: 5 };
+      const withVoid = trickBeatenRisk({ ...common, opponents: [{ voids: new Set(['DIAMOND']) }] });
+      const noVoidInfo = trickBeatenRisk({ ...common, opponents: [{ voids: new Set() }] });
+      // Plenty of diamonds are unseen => an unknown opponent probably still follows; a known void one cuts.
+      assert.ok(withVoid > noVoidInfo, `${withVoid} > ${noVoidInfo}`);
+    });
+
+    test('a player known to have no giruda cannot cut', () => {
+      const unseen = [card('HEART', '9'), card('HEART', '8')];
+      const risk = trickBeatenRisk({
+        bestCard: card('DIAMOND', 'A'),
+        leadSuit: 'DIAMOND',
+        giruda: 'HEART',
+        jokerPowerless: false,
+        unseen,
+        cardsPerOpponent: 1,
+        opponents: [{ voids: new Set(['DIAMOND', 'HEART']) }],
+      });
+      assert.equal(risk, 0);
+    });
+
+    test('opposition giruda count excludes played, own and known ally cards and is 0 when all are void', () => {
+      const n = estimateOppositionGiruda({
+        hand: hearts('A', 'K'),
+        played: hearts('2', '3', '4'),
+        giruda: 'HEART',
+        allyCards: [{ suit: 'HEART', rank: 'Q' }],
+        opponents: [{ voids: new Set() }],
+      });
+      assert.equal(n, 13 - 2 - 3 - 1);
+      const none = estimateOppositionGiruda({ hand: [], played: [], giruda: 'HEART', opponents: [{ voids: new Set(['HEART']) }] });
+      assert.equal(none, 0);
+    });
+  });
+
+  describe('draining the opposition giruda as the owner team', () => {
+    const ctx = (role: 'FRIEND' | 'PRESIDENT' | 'OPPOSITION', extra = {}) => ({
+      role,
+      friendRevealed: true,
+      playersBehind: ['a', 'b', 'c', 'd'],
+      knownAllyIds: [],
+      rng: () => 0,
+      ...extra,
+    });
+
+    test('a friend leading with the opposition giruda still out leads the giruda', () => {
+      const trump = card('HEART', 'K');
+      const d = selectCardToPlay({
+        ...base,
+        hand: [trump, card('HEART', '5'), card('DIAMOND', '4'), card('CLUB', '9')],
+        currentTrickPlays: [],
+        trickNumber: 4,
+        isPartnerWinningCurrentTrick: false,
+        context: ctx('FRIEND'),
+      });
+      assert.equal(d.cardId, trump.id);
+      assert.equal(d.reason, 'drain_giruda');
+    });
+
+    test('a weak giruda is not led into higher unseen trumps', () => {
+      const d = selectCardToPlay({
+        ...base,
+        hand: [card('HEART', '5'), card('HEART', '4'), card('DIAMOND', '4')],
+        currentTrickPlays: [],
+        trickNumber: 4,
+        isPartnerWinningCurrentTrick: false,
+        context: ctx('FRIEND'),
+      });
+      assert.notEqual(d.reason, 'drain_giruda');
+    });
+
+    test('a friend with the joker leads it naming the giruda (middle tricks only)', () => {
+      const j = joker();
+      const hand = [j, card('HEART', '5'), card('DIAMOND', '4'), card('CLUB', '9')];
+      const mightyPlayed = [card('SPADE', 'A')];
+      const d = selectCardToPlay({
+        ...base,
+        hand,
+        currentTrickPlays: [],
+        trickNumber: 4,
+        isPartnerWinningCurrentTrick: false,
+        context: ctx('FRIEND', { playedCards: mightyPlayed }),
+      });
+      assert.equal(d.cardId, j.id);
+      assert.equal(d.jokerLeadSuit, 'HEART');
+      assert.equal(d.reason, 'drain_giruda_joker');
+      // First trick: the joker cannot lead; the call to lead a trump is not made.
+      const first = selectCardToPlay({
+        ...base,
+        hand,
+        currentTrickPlays: [],
+        trickNumber: 1,
+        isPartnerWinningCurrentTrick: false,
+        context: ctx('FRIEND', { playedCards: mightyPlayed }),
+      });
+      assert.notEqual(first.cardId, j.id);
+      // Last trick: the joker is powerless.
+      const last = selectCardToPlay({
+        ...base,
+        hand: [j, card('HEART', '5')],
+        currentTrickPlays: [],
+        trickNumber: TOTAL_TRICKS,
+        isPartnerWinningCurrentTrick: false,
+        context: ctx('FRIEND', { playedCards: mightyPlayed }),
+      });
+      assert.notEqual(last.reason, 'drain_giruda_joker');
+    });
+
+    test('with the opposition giruda used up it leads a lead-keeping card and saves the joker', () => {
+      const j = joker();
+      const kd = card('DIAMOND', 'K');
+      const hand = [j, kd, card('DIAMOND', '3'), ...hearts('10', 'J', 'Q', 'K', 'A')];
+      const played = [...hearts('2', '3', '4', '5', '6', '7', '8', '9'), card('DIAMOND', 'A'), card('SPADE', 'A')];
+      const d = selectCardToPlay({
+        ...base,
+        hand,
+        currentTrickPlays: [],
+        trickNumber: 4,
+        isPartnerWinningCurrentTrick: false,
+        context: ctx('FRIEND', { playedCards: played }),
+      });
+      assert.equal(d.cardId, kd.id);
+      assert.equal(d.reason, 'lead_master');
+    });
+
+    test('opposition AIs are not affected and the first-trick giruda ban still holds', () => {
+      const trump = card('HEART', 'K');
+      const side = card('DIAMOND', '4');
+      const opp = selectCardToPlay({
+        ...base,
+        hand: [trump, card('HEART', '5'), side],
+        currentTrickPlays: [],
+        trickNumber: 4,
+        isPartnerWinningCurrentTrick: false,
+        context: ctx('OPPOSITION'),
+      });
+      assert.equal(opp.cardId, side.id);
+      const first = selectCardToPlay({
+        ...base,
+        hand: [trump, side],
+        currentTrickPlays: [],
+        trickNumber: 1,
+        isPartnerWinningCurrentTrick: false,
+        restrictGirudaLead: true,
+        context: ctx('PRESIDENT'),
+      });
+      assert.equal(first.cardId, side.id);
+    });
+
+    test('no giruda: nothing to drain', () => {
+      const d = selectCardToPlay({
+        ...base,
+        giruda: 'NO_GIRUDA',
+        hand: [card('HEART', 'K'), card('DIAMOND', '4')],
+        currentTrickPlays: [],
+        trickNumber: 4,
+        isPartnerWinningCurrentTrick: false,
+        context: ctx('FRIEND'),
+      });
+      assert.notEqual(d.reason, 'drain_giruda');
+    });
+  });
+
+  describe('friend reveal timing', () => {
+    test('a friend holding the declared mighty leads it from the middle game instead of waiting for the end', () => {
+      const mighty = card('SPADE', 'A');
+      const d = selectCardToPlay({
+        ...base,
+        hand: [mighty, card('DIAMOND', '4'), card('CLUB', '9')],
+        currentTrickPlays: [],
+        trickNumber: 5,
+        isPartnerWinningCurrentTrick: false,
+        context: { role: 'FRIEND', friendDeclaration: { type: 'MIGHTY' }, friendRevealed: false, rng: () => 0 },
+      });
+      assert.equal(d.cardId, mighty.id);
+    });
+  });
+
+  describe('variety', () => {
+    test('equal dump candidates vary with the rng but the choice is never a clear loss', () => {
+      const three = card('DIAMOND', '3');
+      const four = card('DIAMOND', '4');
+      const nine = card('DIAMOND', '9');
+      const run = (r: number) =>
+        selectCardToPlay({
+          ...base,
+          hand: [three, four, nine],
+          leadSuit: 'DIAMOND',
+          trickNumber: 3,
+          currentTrickPlays: [play('x', card('DIAMOND', 'A'))],
+          isPartnerWinningCurrentTrick: false,
+          context: { rng: () => r },
+        });
+      const picks = new Set([0, 0.99].map((r) => run(r).cardId));
+      assert.deepEqual(picks, new Set([three.id, four.id]));
+      for (let i = 0; i < 20; i++) assert.notEqual(run(Math.random()).cardId, nine.id);
+    });
+
+    test('same seed, same decision', () => {
+      const hand = [card('DIAMOND', '3'), card('DIAMOND', '4'), card('CLUB', '5'), card('CLUB', '6')];
+      const decide = () =>
+        selectCardToPlay({ ...base, hand, currentTrickPlays: [], trickNumber: 3, isPartnerWinningCurrentTrick: false, context: { role: 'OPPOSITION', rng: () => 0.5 } }).cardId;
+      assert.equal(decide(), decide());
+    });
+  });
+
+  describe('information boundary', () => {
+    test('the AI context holds only the viewer\'s role and public data, never another hand', () => {
+      const engine = new GameEngine({ players: makePlayers(), giruda: 'HEART' });
+      engine.deal();
+      const ctx = engine.getAiPlayContext('p1');
+      assert.deepEqual(Object.keys(ctx).sort(), [
+        'friendDeclaration', 'friendRevealed', 'knownAllyIds', 'playedCards', 'playersBehind', 'role', 'tricks',
+      ]);
+      assert.equal(ctx.playedCards?.length, 0);
+      assert.deepEqual(ctx.knownAllyIds, []);
+      const handIds = new Set(engine.state.players.flatMap((p) => p.hand.map((c) => c.id)));
+      assert.ok(!JSON.stringify(ctx).split('"').some((t) => handIds.has(t) && t.length > 0 && /^\d+$/.test(t)));
+    });
+
+    test('unseenCards removes only the given cards', () => {
+      const unseen = unseenCards([card('SPADE', 'A'), joker()], [{ suit: 'HEART', rank: 'K' }]);
+      assert.equal(unseen.length, 53 - 3);
+    });
   });
 });
 
