@@ -8,7 +8,7 @@ function makePlayers(): Player[] {
     id: `p${i}`,
     socketId: '',
     username: `p${i}`,
-    seat: (['bottom', 'top', 'left', 'right', 'center'] as const)[i],
+    seat: (['bottom', 'left', 'top', 'center', 'right'] as const)[i],
     hand: [],
     isReady: false,
     isAi: i !== 0,
