@@ -52,6 +52,53 @@ describe('GameEngine.getPlayableCardIds', () => {
     assert.deepEqual(engine.getPlayableCardIds('p1').sort(), ['HEART_2', 'HEART_K', 'JOKER_A']);
   });
 
+  test('the mighty is playable while holding the lead suit', () => {
+    const engine = makeEngine('HEART'); // mighty = SPADE A
+    engine.state.currentTurnIndex = 1;
+    engine.state.currentTrick = {
+      id: 't',
+      trickNumber: 2,
+      cards: [{ playerId: 'p0', playerIndex: 0, card: card('SPADE', '9') }],
+      leadSuit: 'SPADE',
+    } as never;
+    engine.state.players[1].hand = [card('SPADE', 'A'), card('SPADE', '2'), card('CLUB', 'K')];
+    assert.deepEqual(engine.getPlayableCardIds('p1').sort(), ['SPADE_2', 'SPADE_A']);
+
+    engine.state.currentTrick = {
+      id: 't',
+      trickNumber: 2,
+      cards: [{ playerId: 'p0', playerIndex: 0, card: card('CLUB', '9') }],
+      leadSuit: 'CLUB',
+    } as never;
+    assert.deepEqual(engine.getPlayableCardIds('p1').sort(), ['CLUB_K', 'SPADE_A']);
+  });
+
+  test('a mighty that is the only lead-suit card does not force following', () => {
+    const engine = makeEngine('HEART'); // mighty = SPADE A
+    engine.state.currentTurnIndex = 1;
+    engine.state.currentTrick = {
+      id: 't',
+      trickNumber: 2,
+      cards: [{ playerId: 'p0', playerIndex: 0, card: card('SPADE', '9') }],
+      leadSuit: 'SPADE',
+    } as never;
+    engine.state.players[1].hand = [card('SPADE', 'A'), card('CLUB', 'K'), card('HEART', '4')];
+    assert.deepEqual(engine.getPlayableCardIds('p1').sort(), ['CLUB_K', 'HEART_4', 'SPADE_A']);
+  });
+
+  test('with SPADE giruda the mighty is DIAMOND A and SPADE A must follow suit like any card', () => {
+    const engine = makeEngine('SPADE');
+    engine.state.currentTurnIndex = 1;
+    engine.state.currentTrick = {
+      id: 't',
+      trickNumber: 2,
+      cards: [{ playerId: 'p0', playerIndex: 0, card: card('DIAMOND', '9') }],
+      leadSuit: 'DIAMOND',
+    } as never;
+    engine.state.players[1].hand = [card('DIAMOND', 'A'), card('DIAMOND', '2'), card('SPADE', 'A')];
+    assert.deepEqual(engine.getPlayableCardIds('p1').sort(), ['DIAMOND_2', 'DIAMOND_A']);
+  });
+
   test('any card is playable when the lead suit is missing', () => {
     const engine = makeEngine();
     engine.state.currentTurnIndex = 1;
