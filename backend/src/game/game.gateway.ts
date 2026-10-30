@@ -310,12 +310,9 @@ export class GameGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
           jokerCallCard: engine.jokerCallCard,
           restrictGirudaLead: engine.restrictsGirudaLead(),
           isJokerCallActive: engine.state.isJokerCallActive,
-          context: {
-            role: engine.getTeamRole(turnPlayer.id),
-            playedCards: engine.getPlayedCards(),
-            friendDeclaration: engine.state.friendDeclaration,
-          },
+          context: engine.getAiPlayContext(turnPlayer.id),
         });
+        this.logAiDecision(roomId, turnPlayer, engine.state.currentTrickNumber, decision.cardId, decision.reason);
         this.playCardAndAnnounce(roomId, managed, turnPlayer.id, decision.cardId, {
           jokerCall: decision.jokerCall,
           jokerLeadSuit: decision.jokerLeadSuit,
@@ -323,6 +320,16 @@ export class GameGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
         break;
       }
     }
+  }
+
+  /** Server-log only (never sent to a client), enabled with `AI_DEBUG=1`: who played what and why. */
+  private logAiDecision(roomId: string, player: Player, trickNumber: number, cardId: string, reason: string) {
+    if (process.env.AI_DEBUG !== '1') return;
+    const show = (c: { suit: string; rank: string }) => `${c.suit}${c.rank}`;
+    const chosen = player.hand.find((c) => c.id === cardId);
+    this.logger.log(
+      `[AI] room=${roomId} ${player.username} trick=${trickNumber} play=${chosen ? show(chosen) : cardId} reason=${reason} hand=[${player.hand.map(show).join(',')}]`
+    );
   }
 
   /** Plays a card in the engine and announces it (card, friend reveal, completed trick). */
