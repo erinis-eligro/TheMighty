@@ -16,7 +16,12 @@ backend-test:
     - npm ci
     - npx prisma generate
     - npm run build
-    - npm test
+    # rootDir 이 src 이므로 ../coverage = backend/coverage (sonarqube-check 가 lcov.info 를 사용한다)
+    - npm test -- --coverage --coverageReporters=lcov --coverageDirectory=../coverage
+  artifacts:
+    expire_in: 1 week
+    paths:
+      - backend/coverage/
   rules:
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
     - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
@@ -117,3 +122,44 @@ frontend-e2e:
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
       when: manual
       allow_failure: true
+
+# SonarQube 정적 분석(SAST). 설정은 루트 sonar-project.properties 참고.
+# 필요한 CI/CD 변수 (Settings > CI/CD > Variables):
+#   - SONAR_HOST_URL : SonarQube 서버 URL
+#   - SONAR_TOKEN    : 분석 토큰 (Masked)
+#   - SONAR_PR_ANALYSIS : (선택) "true" 면 MR 분석에 sonar.pullrequest.* 를 넘긴다. Developer 에디션 이상에서만 설정한다.
+#     Community 에디션은 PR 분석을 지원하지 않으므로 설정하지 않으면 MR 의 변경 코드를 main 대상으로 분석한다.
+# SONAR_HOST_URL/SONAR_TOKEN 이 없으면 job 이 생성되지 않는다. (포크, 설정 전 환경)
+# main 을 대상으로 하는 Merge Request 파이프라인에서만 실행한다. (main 푸시 파이프라인에서는 실행하지 않는다)
+# 처음에는 allow_failure: true 로 품질 게이트 실패가 MR 을 막지 않게 한다.
+# 기존 이슈가 정리되면 allow_failure 를 제거해 필수 검사로 전환한다.
+sonarqube-check:
+  stage: test
+  image:
+    name: sonarsource/sonar-scanner-cli:11
+    entrypoint: [""]
+  tags:
+    - docker
+  variables:
+    SONAR_USER_HOME: "${CI_PROJECT_DIR}/.sonar"
+    GIT_DEPTH: "0"
+  cache:
+    key: "${CI_JOB_NAME}"
+    paths:
+      - ${CI_PROJECT_DIR}/.sonar/cache
+  needs:
+    - job: backend-test
+      artifacts: true
+      optional: true
+  script:
+    # jest 의 lcov 경로(src/...)를 저장소 루트 기준(backend/src/...)으로 바꾼다. 파일이 없으면 건너뛴다.
+    - if [ -f backend/coverage/lcov.info ]; then sed -i 's#^SF:src/#SF:backend/src/#' backend/coverage/lcov.info; fi
+    - |
+      PR_ARGS=""
+      if [ "$SONAR_PR_ANALYSIS" = "true" ]; then
+        PR_ARGS="-Dsonar.pullrequest.key=$CI_MERGE_REQUEST_IID -Dsonar.pullrequest.branch=$CI_MERGE_REQUEST_SOURCE_BRANCH_NAME -Dsonar.pullrequest.base=$CI_MERGE_REQUEST_TARGET_BRANCH_NAME"
+      fi
+      sonar-scanner -Dsonar.host.url="${SONAR_HOST_URL}" -Dsonar.token="${SONAR_TOKEN}" -Dsonar.qualitygate.wait=true $PR_ARGS
+  allow_failure: true
+  rules:
+    - if: '$SONAR_TOKEN && $SONAR_HOST_URL && $CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == $CI_DEFAULT_BRANCH'
