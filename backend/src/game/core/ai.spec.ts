@@ -358,6 +358,74 @@ describe('AI play: partner safety, void tracking, giruda draining (#33)', () => 
     assert.equal(d.reason, 'feed_partner');
   });
 
+  describe('friend does not cover the president\'s giruda master with the mighty', () => {
+    const friendFollow = (hand: Card[], trickNumber: number, plays: ReturnType<typeof play>[], extra = {}) =>
+      selectCardToPlay({
+        ...base,
+        hand,
+        leadSuit: 'HEART',
+        trickNumber,
+        currentTrickPlays: plays,
+        isPartnerWinningCurrentTrick: true,
+        context: {
+          role: 'FRIEND',
+          friendDeclaration: { type: 'MIGHTY' },
+          friendRevealed: false,
+          playersBehind: ['p2', 'p3', 'p4'],
+          knownAllyIds: ['p0'],
+          rng: () => 0,
+          ...extra,
+        },
+      });
+
+    // Seven cards left (mid game): the joker alone is enough to push the beaten risk over the limit.
+    const midHand = ['2', '3', '5', '6', '7'].map((r) => card('DIAMOND', r as Card['rank']));
+
+    test('keeps the mighty and feeds a side-suit point card', () => {
+      const mighty = card('SPADE', 'A');
+      const k = card('DIAMOND', 'K');
+      const d = friendFollow([mighty, k, ...midHand], 4, [play('p0', card('HEART', 'A'))]);
+      assert.equal(d.cardId, k.id);
+      assert.equal(d.reason, 'feed_partner');
+    });
+
+    test('keeps the mighty and dumps low without a point card', () => {
+      const mighty = card('SPADE', 'A');
+      const d = friendFollow([mighty, ...midHand], 4, [play('p0', card('HEART', 'A'))]);
+      assert.equal(d.cardId, midHand[0].id);
+      assert.equal(d.reason, 'partner_winning_dump');
+    });
+
+    test('still covers a giruda that is not the master (a higher giruda is unseen)', () => {
+      const mighty = card('SPADE', 'A');
+      const d = friendFollow([mighty, card('DIAMOND', '4'), ...midHand], 4, [play('p0', card('HEART', 'K'))]);
+      assert.equal(d.cardId, mighty.id);
+      assert.equal(d.reason, 'secure_partner_trick');
+    });
+
+    test('regression: in the last tricks the mighty may still cover the master', () => {
+      const mighty = card('SPADE', 'A');
+      const d = friendFollow([mighty, ...midHand], TOTAL_TRICKS - 1, [play('p0', card('HEART', 'A'))]);
+      assert.equal(d.cardId, mighty.id);
+      assert.equal(d.reason, 'secure_partner_trick');
+    });
+
+    test('regression: an opposing card winning with points is still taken with the mighty', () => {
+      const mighty = card('SPADE', 'A');
+      const d = selectCardToPlay({
+        ...base,
+        hand: [mighty, card('DIAMOND', '4')],
+        leadSuit: 'HEART',
+        trickNumber: 4,
+        currentTrickPlays: [play('o1', card('HEART', 'A'))],
+        isPartnerWinningCurrentTrick: false,
+        context: { role: 'FRIEND', friendDeclaration: { type: 'MIGHTY' }, friendRevealed: false, playersBehind: ['p2', 'p3', 'p4'], knownAllyIds: ['p0'] },
+      });
+      assert.equal(d.cardId, mighty.id);
+      assert.equal(d.reason, 'win_cheaply');
+    });
+  });
+
   describe('opposition feeding a fellow opposition player', () => {
     const lead = (playersBehind: string[], plays: ReturnType<typeof play>[], friendRevealed: boolean, extra = {}) => {
       const k = card('DIAMOND', 'K');
