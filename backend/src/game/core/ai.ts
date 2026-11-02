@@ -77,6 +77,9 @@ const LEAD_BAND = 2;
 const RISK_LIMIT_PER_POINT = 0.05;
 const MIN_RISK_LIMIT = 0.1;
 
+/** In this many last tricks the owner team may still cover its partner's master card with the mighty. */
+const MIGHTY_COVER_LAST_TRICKS = 2;
+
 /** The owner team drains the opposition's giruda while at least this many may be left. */
 const DRAIN_MIN_GIRUDA = 1;
 
@@ -448,7 +451,13 @@ export function selectCardToPlay({
         cardsPerOpponent: hand.length,
       });
       const limit = Math.max(MIN_RISK_LIMIT, BEATEN_RISK_THRESHOLD - RISK_LIMIT_PER_POINT * pointsOnTable);
-      if (risk < limit) {
+      // Only the mighty or the joker can still beat the partner's card (e.g. a giruda master): covering it
+      // with the mighty would waste it and reveal the friend, so the owner team accepts the joker risk.
+      const partnerIsMaster =
+        role !== 'OPPOSITION' &&
+        trickNumber < totalTricks - MIGHTY_COVER_LAST_TRICKS + 1 &&
+        !unseen.some((u) => !isMightyCard(u, giruda) && !isJokerCard(u) && strengthOf(u) > currentBest.strength);
+      if (risk < limit || partnerIsMaster) {
         if (feedable.length > 0) return { cardId: pickAmong([...feedable].sort(byDump), (c) => dumpValue(c, giruda), 0, rng).id, reason: 'feed_partner' };
       } else if (role !== 'OPPOSITION' && pointsOnTable > 0) {
         // The owner team does not leave a trick with points to a coin flip: take it over itself.
