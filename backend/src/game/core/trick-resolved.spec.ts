@@ -142,7 +142,9 @@ test('after the last trick advanceAfterTrick goes ROUND_SCORING -> GAME_OVER', (
 
   assert.equal(engine.advanceAfterTrick().gameOver, true);
   assert.equal(engine.state.phase, 'GAME_OVER');
-  assert.equal(engine.getResult().teamPoints, 0);
+  // Nobody collected a point card in this game; the owner team only holds the discarded kitty's.
+  const result = engine.getResult();
+  assert.equal(result.teamPoints, result.kittyPoints);
 });
 
 test('last trick: a joker lead must name a suit, and the highest card of that suit wins', () => {

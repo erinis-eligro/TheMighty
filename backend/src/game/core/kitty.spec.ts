@@ -116,7 +116,7 @@ test('changing the giruda requires raising the bid by at least 2 and recomputes 
   assert.deepEqual(engine.mightyCard, { suit: 'DIAMOND', rank: 'A' });
 });
 
-test('discarded point cards do not count for either team', () => {
+test('discarded point cards are not credited to any player during the tricks', () => {
   const engine = kittyEngine();
   engine.exchangeKitty('p2', { discardCardIds: pick(engine) });
   assert.ok(engine.state.players.every((p) => p.collectedScoreCards.length === 0 && p.score === 0));
@@ -140,7 +140,7 @@ test('AI discard picks 3 valid cards and keeps joker, mighty and giruda-strength
   }
 });
 
-test('discarded point cards leave the game: the reachable maximum is 20 minus the discarded point cards', () => {
+test('discarded point cards count for the owner team: all 20 point cards end up with one team', () => {
   const engine = kittyEngine();
   const combined = [...engine.state.players[2].hand, ...engine.state.kitty];
   // Discard as many point cards as possible (up to 3), filling up with other cards.
@@ -173,5 +173,6 @@ test('discarded point cards leave the game: the reachable maximum is 20 minus th
   }
 
   const r = engine.getResult();
-  assert.equal(r.teamPoints + r.opponentPoints, 20 - discardedPoints);
+  assert.equal(r.kittyPoints, discardedPoints);
+  assert.equal(r.teamPoints + r.opponentPoints, 20);
 });

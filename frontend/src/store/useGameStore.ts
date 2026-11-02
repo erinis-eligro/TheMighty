@@ -85,6 +85,8 @@ export type RoundResult = {
   giruda: BidGiruda;
   teamPoints: number;
   opponentPoints: number;
+  /** Point cards in the discarded kitty; already included in `teamPoints`. */
+  kittyPoints: number;
   ownerPlayerId: string;
   friendPlayerId: string | null;
   players: { playerId: string; role: PlayerRole; points: number }[];

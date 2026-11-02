@@ -71,6 +71,74 @@ test('scoreRound: president who is his own friend is not double counted', () => 
   assert.equal(r.players[0].role, 'OWNER');
 });
 
+test('scoreRound: discarded kitty point cards count for the owner team (12 + 3 kitty vs 5 -> win at bid 15)', () => {
+  const r = scoreRound({
+    players: players([8, 4, 2, 2, 1]),
+    ownerPlayerId: 'p0',
+    friendPlayerId: 'p1',
+    bidScore: 15,
+    giruda: 'HEART',
+    kitty: [{ rank: 'A' }, { rank: 'K' }, { rank: '10' }],
+  });
+  assert.equal(r.teamPoints, 15);
+  assert.equal(r.opponentPoints, 5);
+  assert.equal(r.kittyPoints, 3);
+  assert.equal(r.isWin, true);
+  // Kitty points are not added to any player's own points.
+  assert.deepEqual(r.players.map((p) => p.points), [8, 4, 2, 2, 1]);
+});
+
+test('scoreRound: without discarded point cards the result is unchanged', () => {
+  const withEmpty = scoreRound({
+    players: players([8, 4, 2, 2, 1]),
+    ownerPlayerId: 'p0',
+    friendPlayerId: 'p1',
+    bidScore: 13,
+    giruda: 'HEART',
+    kitty: [{ rank: '2' }, { rank: '5' }, { rank: '9' }],
+  });
+  const without = scoreRound({
+    players: players([8, 4, 2, 2, 1]),
+    ownerPlayerId: 'p0',
+    friendPlayerId: 'p1',
+    bidScore: 13,
+    giruda: 'HEART',
+  });
+  assert.equal(withEmpty.kittyPoints, 0);
+  assert.deepEqual(withEmpty, without);
+  assert.equal(without.teamPoints, 12);
+  assert.equal(without.isWin, false);
+});
+
+test('scoreRound: a discarded joker is not a point card', () => {
+  const r = scoreRound({
+    players: players([8, 4, 2, 2, 1]),
+    ownerPlayerId: 'p0',
+    friendPlayerId: 'p1',
+    bidScore: 13,
+    giruda: 'HEART',
+    kitty: [{ rank: 'JOKER' }, { rank: 'Q' }, { rank: '3' }],
+  });
+  assert.equal(r.kittyPoints, 1);
+  assert.equal(r.teamPoints, 13);
+});
+
+test('scoreRound: team + opposition points always add up to 20 when every point card is accounted for', () => {
+  for (let kittyPoints = 0; kittyPoints <= 3; kittyPoints++) {
+    const kitty = [{ rank: 'JOKER' }, { rank: '2' }, { rank: '3' }].map((c, i) => (i < kittyPoints ? { rank: 'A' } : c));
+    const r = scoreRound({
+      players: players([5, 3, 4, 3, 5 - kittyPoints]),
+      ownerPlayerId: 'p0',
+      friendPlayerId: 'p1',
+      bidScore: 13,
+      giruda: 'SPADE',
+      kitty,
+    });
+    assert.equal(r.kittyPoints, kittyPoints);
+    assert.equal(r.teamPoints + r.opponentPoints, 20);
+  }
+});
+
 test('evaluateGameResult: win at exactly the bid score', () => {
   assert.equal(evaluateGameResult(13, 13), true);
   assert.equal(evaluateGameResult(12, 13), false);
@@ -137,8 +205,9 @@ test('engine: a full game ends in GAME_OVER with a scored result', () => {
   assert.equal(engine.state.phase, 'GAME_OVER');
   const r = engine.getResult();
   const collected = engine.state.players.reduce((s, p) => s + p.collectedScoreCards.length, 0);
-  assert.equal(r.teamPoints + r.opponentPoints, collected);
-  assert.equal(r.teamPoints, engine.state.players[0].collectedScoreCards.length);
+  assert.equal(r.teamPoints + r.opponentPoints, collected + r.kittyPoints);
+  assert.equal(r.teamPoints, engine.state.players[0].collectedScoreCards.length + r.kittyPoints);
+  assert.equal(r.teamPoints + r.opponentPoints, 20);
   assert.equal(r.isWin, r.teamPoints >= 13);
   assert.deepEqual(engine.state.result, r);
 });

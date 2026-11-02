@@ -765,7 +765,7 @@ describe('AI self-play simulation', () => {
       const r = engine.getResult();
       assert.ok(r.bidScore >= MIN_BID && r.bidScore <= MAX_BID);
       const collected = engine.state.players.reduce((s, p) => s + p.collectedScoreCards.length, 0);
-      assert.equal(r.teamPoints + r.opponentPoints, collected);
+      assert.equal(r.teamPoints + r.opponentPoints, collected + r.kittyPoints);
       if (r.isWin) ownerWins++;
       if (r.friendPlayerId) withFriend++;
       for (const p of r.players) roles[p.role]++;
