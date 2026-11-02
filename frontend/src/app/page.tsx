@@ -1,6 +1,10 @@
 import Link from 'next/link';
 
+// 빌드 시점에 연도가 고정되지 않도록 요청마다 렌더링한다.
+export const dynamic = 'force-dynamic';
+
 export default function Home() {
+  const year = new Date().getFullYear();
   return (
     <div className="min-h-screen bg-pastel-bg flex flex-col items-center justify-center p-6">
       <div className="bg-white rounded-3xl shadow-2xl p-10 w-full max-w-md border border-pastel-border text-center">
@@ -10,6 +14,9 @@ export default function Home() {
           게임 시작하기
         </Link>
       </div>
+      <footer className="mt-6 text-xs text-pastel-muted whitespace-nowrap">
+        © {year} erinis eligro · v{process.env.NEXT_PUBLIC_APP_VERSION}
+      </footer>
     </div>
   );
 }
