@@ -19,6 +19,7 @@ import {
   GIRUDA_CHANGE_RAISE,
 } from './rules';
 import { assertTransition } from './phase';
+import type { AiPlayContext } from './ai';
 import { GameRuleError } from './errors';
 import {
   FriendReveal,
@@ -400,6 +401,31 @@ export class GameEngine {
     const unique = new Map<string, Card>();
     for (const t of tricks) for (const p of t.cards) unique.set(p.card.id, p.card);
     return [...unique.values()];
+  }
+
+  /**
+   * What the AI of `viewerId` may use beyond its own hand: its role, public play history (cards, lead
+   * suits for void tracking), who still has to play, and the allies it can know (see `isAlly`).
+   * Never contains another player's hand.
+   */
+  getAiPlayContext(viewerId: string): AiPlayContext {
+    const finished = this.state.trickHistory;
+    const current = this.state.currentTrick;
+    const tricks = (current ? [...finished, current] : finished).map((t) => ({
+      leadSuit: t.leadSuit,
+      cards: t.cards.map((p) => ({ playerId: p.playerId, card: p.card })),
+    }));
+    const played = new Set((current?.cards ?? []).map((p) => p.playerId));
+    const others = this.state.players.filter((p) => p.id !== viewerId);
+    return {
+      role: this.getTeamRole(viewerId),
+      playedCards: this.getPlayedCards(),
+      friendDeclaration: this.state.friendDeclaration,
+      friendRevealed: this.state.friendRevealed,
+      tricks,
+      playersBehind: others.filter((p) => !played.has(p.id)).map((p) => p.id),
+      knownAllyIds: others.filter((p) => this.isAllyOf(viewerId, p.id)).map((p) => p.id),
+    };
   }
 
   /**
