@@ -1,6 +1,6 @@
 {
   "name": "mighty-backend",
-  "version": "1.0.0",
+  "version": "0.1.0",
   "description": "Mighty trick-taking card game backend (NestJS + Prisma + Socket.io)",
   "private": true,
   "scripts": {
