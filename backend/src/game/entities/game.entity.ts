@@ -89,10 +89,12 @@ export interface RoundResult {
   isWin: boolean;
   bidScore: number;
   giruda: Suit | 'NO_GIRUDA';
-  /** Score cards collected by the owner team (president + friend). */
+  /** Score cards of the owner team: collected by president + friend, plus the discarded kitty's (`kittyPoints`). */
   teamPoints: number;
   /** Score cards collected by the opposition. */
   opponentPoints: number;
+  /** Point cards in the president's discarded kitty; already included in `teamPoints`, not in any player's `points`. */
+  kittyPoints: number;
   ownerPlayerId: string;
   /** Null for no-friend (or when the president is his own friend). */
   friendPlayerId: string | null;

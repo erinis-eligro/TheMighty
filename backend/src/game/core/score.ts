@@ -18,6 +18,7 @@ export function getPlayerRole(playerId: string, ownerPlayerId: string, friendPla
 /**
  * ROUND_SCORING: sums the score cards of the owner team (president + friend)
  * and of the opposition, and decides the winner (teamPoints >= bidScore).
+ * The point cards in the president's discarded kitty count for the owner team.
  */
 export function scoreRound({
   players,
@@ -25,12 +26,15 @@ export function scoreRound({
   friendPlayerId,
   bidScore,
   giruda,
+  kitty = [],
 }: {
   players: { id: string; collectedScoreCards: unknown[] }[];
   ownerPlayerId: string;
   friendPlayerId?: string | null;
   bidScore: number;
   giruda: Suit | 'NO_GIRUDA';
+  /** The 3 cards the president discarded (the joker is not a point card). */
+  kitty?: { rank: string }[];
 }): RoundResult {
   const scores: PlayerRoundScore[] = players.map((p) => ({
     playerId: p.id,
@@ -39,7 +43,8 @@ export function scoreRound({
   }));
   const sumOf = (ownerTeam: boolean) =>
     scores.filter((s) => (s.role !== 'OPPOSER') === ownerTeam).reduce((sum, s) => sum + s.points, 0);
-  const teamPoints = sumOf(true);
+  const kittyPoints = kitty.filter((c) => isPointCard(c)).length;
+  const teamPoints = sumOf(true) + kittyPoints;
 
   return {
     isWin: evaluateGameResult(teamPoints, bidScore),
@@ -47,6 +52,7 @@ export function scoreRound({
     giruda,
     teamPoints,
     opponentPoints: sumOf(false),
+    kittyPoints,
     ownerPlayerId,
     friendPlayerId: scores.some((s) => s.role === 'FRIEND') ? (friendPlayerId ?? null) : null,
     players: scores,
