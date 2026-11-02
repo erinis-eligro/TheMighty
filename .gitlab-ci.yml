@@ -134,7 +134,8 @@ frontend-e2e:
 #     Community 에디션은 PR 분석을 지원하지 않으므로 설정하지 않으면 MR 의 변경 코드를 main 대상으로 분석한다.
 # 커버리지(backend/coverage/lcov.info)의 경로 보정(SF:src/ -> SF:backend/src/)은 backend-test 에서 이미 끝난 상태로 artifact 를 받는다.
 # SONAR_HOST_URL/SONAR_TOKEN 이 없으면 job 이 생성되지 않는다. (포크, 설정 전 환경)
-# main 을 대상으로 하는 Merge Request 파이프라인에서만 실행한다. (main 푸시 파이프라인에서는 실행하지 않는다)
+# main 을 대상으로 하는 Merge Request 파이프라인과 main 브랜치 푸시 파이프라인에서 실행한다.
+# main 푸시 파이프라인에는 CI_MERGE_REQUEST_* 변수가 없으므로 SONAR_PR_ANALYSIS 가 true 여도 sonar.pullrequest.* 를 넘기지 않는다.
 # 처음에는 allow_failure: true 로 품질 게이트 실패가 MR 을 막지 않게 한다.
 # 기존 이슈가 정리되면 allow_failure 를 제거해 필수 검사로 전환한다.
 sonarqube-check:
@@ -158,10 +159,11 @@ sonarqube-check:
   script:
     - |
       PR_ARGS=""
-      if [ "$SONAR_PR_ANALYSIS" = "true" ]; then
+      if [ "$SONAR_PR_ANALYSIS" = "true" ] && [ "$CI_PIPELINE_SOURCE" = "merge_request_event" ]; then
         PR_ARGS="-Dsonar.pullrequest.key=$CI_MERGE_REQUEST_IID -Dsonar.pullrequest.branch=$CI_MERGE_REQUEST_SOURCE_BRANCH_NAME -Dsonar.pullrequest.base=$CI_MERGE_REQUEST_TARGET_BRANCH_NAME"
       fi
       sonar-scanner -Dsonar.host.url="${SONAR_HOST_URL}" -Dsonar.token="${SONAR_TOKEN}" -Dsonar.qualitygate.wait=true $PR_ARGS
   allow_failure: true
   rules:
     - if: '$SONAR_TOKEN && $SONAR_HOST_URL && $CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == $CI_DEFAULT_BRANCH'
+    - if: '$SONAR_TOKEN && $SONAR_HOST_URL && $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
