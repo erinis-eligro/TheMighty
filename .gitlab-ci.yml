@@ -18,6 +18,9 @@ backend-test:
     - npm run build
     # rootDir 이 src 이므로 ../coverage = backend/coverage (sonarqube-check 가 lcov.info 를 사용한다)
     - npm test -- --coverage --coverageReporters=lcov --coverageDirectory=../coverage
+    # jest 의 lcov 경로(src/...)를 저장소 루트 기준(backend/src/...)으로 바꾼다. (cwd = backend, 파일이 없으면 건너뛴다)
+    # sonarqube-check 는 비root 로 실행되어 root 소유의 artifact 를 수정할 수 없으므로 여기(root)에서 처리한다.
+    - if [ -f coverage/lcov.info ]; then sed -i 's#^SF:src/#SF:backend/src/#' coverage/lcov.info; fi
   artifacts:
     expire_in: 1 week
     paths:
@@ -129,6 +132,7 @@ frontend-e2e:
 #   - SONAR_TOKEN    : 분석 토큰 (Masked)
 #   - SONAR_PR_ANALYSIS : (선택) "true" 면 MR 분석에 sonar.pullrequest.* 를 넘긴다. Developer 에디션 이상에서만 설정한다.
 #     Community 에디션은 PR 분석을 지원하지 않으므로 설정하지 않으면 MR 의 변경 코드를 main 대상으로 분석한다.
+# 커버리지(backend/coverage/lcov.info)의 경로 보정(SF:src/ -> SF:backend/src/)은 backend-test 에서 이미 끝난 상태로 artifact 를 받는다.
 # SONAR_HOST_URL/SONAR_TOKEN 이 없으면 job 이 생성되지 않는다. (포크, 설정 전 환경)
 # main 을 대상으로 하는 Merge Request 파이프라인에서만 실행한다. (main 푸시 파이프라인에서는 실행하지 않는다)
 # 처음에는 allow_failure: true 로 품질 게이트 실패가 MR 을 막지 않게 한다.
@@ -152,8 +156,6 @@ sonarqube-check:
       artifacts: true
       optional: true
   script:
-    # jest 의 lcov 경로(src/...)를 저장소 루트 기준(backend/src/...)으로 바꾼다. 파일이 없으면 건너뛴다.
-    - if [ -f backend/coverage/lcov.info ]; then sed -i 's#^SF:src/#SF:backend/src/#' backend/coverage/lcov.info; fi
     - |
       PR_ARGS=""
       if [ "$SONAR_PR_ANALYSIS" = "true" ]; then
