@@ -303,7 +303,7 @@ export class GameEngine {
    *   card of the 13-card hand (kitty cards included).
    * - Keeping the bid giruda is free. Changing it requires raising the bid
    *   score by at least `GIRUDA_CHANGE_RAISE` (capped at MAX_BID), passed as `bidScore`.
-   * - Discarded point cards are not counted for either team; the discards are
+   * - Discarded point cards count for the owner team at scoring; the discards are
    *   stored in `state.kitty` (visible to the president only).
    *
    * Validation happens before any state is touched, so a rejected exchange
@@ -788,6 +788,7 @@ export class GameEngine {
       friendPlayerId: this.state.friendPlayerId,
       bidScore: this.bidScore,
       giruda: this.state.giruda,
+      kitty: this.state.kitty,
     });
   }
 

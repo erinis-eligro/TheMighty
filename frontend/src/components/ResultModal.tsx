@@ -96,7 +96,7 @@ export function ResultModal() {
             <div className="space-y-3 mb-6 text-left">
               <section className="rounded-xl border border-pastel-border p-3">
                 <h3 className="text-sm font-bold text-pastel-text mb-1">
-                  주공팀 <span className="text-pastel-muted font-normal">({result.teamPoints}장)</span>
+                  주공팀 <span className="text-pastel-muted font-normal">({result.teamPoints}장{result.kittyPoints > 0 && `, 버린 바닥패 ${result.kittyPoints}장 포함`})</span>
                 </h3>
                 <p className="text-xs text-pastel-muted mb-2">
                   주공 {nameOf(result.ownerPlayerId) ?? '-'} · 프렌드 {nameOf(result.friendPlayerId) ?? '없음'}
