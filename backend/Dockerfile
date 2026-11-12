@@ -1,11 +1,12 @@
 # syntax=docker/dockerfile:1
-FROM node:20-alpine AS base
+ARG DOCKER_REGISTRY=jfrog.eunbajaeba.com/cpe-docker-virtual
+FROM ${DOCKER_REGISTRY}/node:20-alpine AS base
 
 # 1. 소스 빌드 & Prisma 바이너리 생성
 FROM base AS builder
 RUN apk add --no-cache libc6-compat openssl ca-certificates python3 make g++ && update-ca-certificates
 WORKDIR /app
-COPY backend/package.json backend/package-lock.json* ./
+COPY backend/package.json backend/package-lock.json* backend/.npmrc* ./
 RUN npm ci
 COPY backend/prisma ./prisma
 ENV PRISMA_CLI_BINARY_FETCH=true

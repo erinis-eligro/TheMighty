@@ -1,0 +1,4 @@
+{
+    "sonarQubeUri": "http://ec2-54-226-36-11.compute-1.amazonaws.com:9000",
+    "projectKey": "themighty"
+}

@@ -1,11 +1,12 @@
 # syntax=docker/dockerfile:1
-FROM node:20-alpine AS base
+ARG DOCKER_REGISTRY=jfrog.eunbajaeba.com/cpe-docker-virtual
+FROM ${DOCKER_REGISTRY}/node:20-alpine AS base
 
 # 1. 빌드
 FROM base AS builder
 RUN apk add --no-cache libc6-compat openssl ca-certificates python3 make g++ && update-ca-certificates
 WORKDIR /app
-COPY frontend/package.json frontend/package-lock.json* ./
+COPY frontend/package.json frontend/package-lock.json frontend/.npmrc ./
 RUN npm ci
 COPY frontend/ ./
 # NEXT_PUBLIC_* 값은 클라이언트 번들에 빌드 시점에 인라인되므로 반드시 build-arg 로 주입한다.
