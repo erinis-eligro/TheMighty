@@ -2,7 +2,16 @@ import assert from 'node:assert/strict';
 import { Card, Player } from '../entities/game.entity';
 import { GameEngine } from './game-engine';
 import { selectBid, selectCardToPlay, selectKittyDiscard, selectFriendDeclaration, estimateHandScore } from './ai';
-import { findVoidSuits, trickBeatenRisk, estimateOppositionGiruda, unseenCards } from './ai-knowledge';
+import {
+  findVoidSuits,
+  trickBeatenRisk,
+  estimateOppositionGiruda,
+  unseenCards,
+  ownerTeamProbability,
+  ownerTeamTrickChance,
+  pointCardsGivenToOwner,
+  pointsNotWonBy,
+} from './ai-knowledge';
 import { getMightyCard, getJokerCallCard, isMightyCard, MAX_BID, MIN_BID, TOTAL_TRICKS } from './rules';
 
 function makePlayers(): Player[] {
@@ -734,7 +743,7 @@ describe('AI play: partner safety, void tracking, giruda draining (#33)', () => 
       engine.deal();
       const ctx = engine.getAiPlayContext('p1');
       assert.deepEqual(Object.keys(ctx).sort(), [
-        'friendDeclaration', 'friendRevealed', 'knownAllyIds', 'playedCards', 'playersBehind', 'role', 'tricks',
+        'bidScore', 'friendDeclaration', 'friendRevealed', 'knownAllyIds', 'ownerPlayerId', 'playedCards', 'playersBehind', 'role', 'selfId', 'tricks',
       ]);
       assert.equal(ctx.playedCards?.length, 0);
       assert.deepEqual(ctx.knownAllyIds, []);
@@ -745,6 +754,222 @@ describe('AI play: partner safety, void tracking, giruda draining (#33)', () => 
     test('unseenCards removes only the given cards', () => {
       const unseen = unseenCards([card('SPADE', 'A'), joker()], [{ suit: 'HEART', rank: 'K' }]);
       assert.equal(unseen.length, 53 - 3);
+    });
+  });
+});
+
+describe('AI play: opposition adds score cards (#44)', () => {
+  const base = {
+    giruda: 'HEART',
+    totalTricks: TOTAL_TRICKS,
+    mightyCard: getMightyCard('HEART'),
+    jokerCallCard: getJokerCallCard('HEART'),
+    isPartnerWinningCurrentTrick: false,
+  };
+  const play = (playerId: string, c: Card) => ({ playerId, card: c });
+  const none = new Set<string>();
+
+  describe('ownerTeamProbability / ownerTeamTrickChance (pure)', () => {
+    const common = { ownerPlayerId: 'p0', knownAllyIds: ['o1'], friendDeclaration: { type: 'MIGHTY' } };
+    test('the president is always owner team; before the reveal the others are the friend with 1/3', () => {
+      assert.equal(ownerTeamProbability({ ...common, otherId: 'p0', friendRevealed: false }), 1);
+      assert.equal(ownerTeamProbability({ ...common, otherId: 'x', friendRevealed: false }), 1 / 3);
+      assert.equal(ownerTeamProbability({ ...common, otherId: 'x', friendRevealed: false, friendDeclaration: { type: 'NO_FRIEND' } }), 0);
+    });
+    test('after the reveal the known allies are opposition and everybody else is owner team', () => {
+      assert.equal(ownerTeamProbability({ ...common, otherId: 'o1', friendRevealed: true }), 0);
+      assert.equal(ownerTeamProbability({ ...common, otherId: 'f', friendRevealed: true }), 1);
+    });
+
+    const unseen = unseenCards([card('DIAMOND', '10'), card('DIAMOND', '3')]);
+    const chance = (best: Card, bestProb: number, probs: number[]) =>
+      ownerTeamTrickChance({
+        bestCard: best, bestOwnerTeamProb: bestProb, leadSuit: 'DIAMOND', giruda: 'HEART', jokerPowerless: false,
+        unseen, behind: probs.map((p) => ({ ownerTeamProb: p, voids: none })), cardsPerOpponent: 7,
+      });
+    test('nobody behind: the current best simply wins', () => {
+      assert.equal(chance(card('DIAMOND', 'A'), 1, []), 1);
+      assert.equal(chance(card('DIAMOND', 'A'), 0, []), 0);
+      assert.equal(chance(card('DIAMOND', 'A'), 1 / 3, []), 1 / 3);
+    });
+    test('the owner team\'s chance falls with more seats behind and with a weaker best card', () => {
+      const fewer = chance(card('DIAMOND', '9'), 1, [0, 0]);
+      const more = chance(card('DIAMOND', '9'), 1, [0, 0, 0]);
+      assert.ok(more < fewer, `${more} < ${fewer}`);
+      assert.ok(chance(card('DIAMOND', '5'), 1, [0, 0]) < chance(card('DIAMOND', 'A'), 1, [0, 0]));
+      // Seats that may be owner team threaten an opposition card instead.
+      assert.ok(chance(card('DIAMOND', '5'), 0, [1, 1]) > chance(card('DIAMOND', '5'), 0, [0, 0]));
+      assert.equal(chance(card('DIAMOND', '5'), 0, [0, 0]), 0);
+    });
+  });
+
+  describe('public trick history helpers', () => {
+    const tricks = [
+      { leadSuit: 'DIAMOND', winnerPlayerId: 'p0', cards: [play('p0', card('DIAMOND', 'A')), play('me', card('DIAMOND', '10')), play('x', card('DIAMOND', '2'))] },
+      { leadSuit: 'CLUB', winnerPlayerId: 'x', cards: [play('x', card('CLUB', 'K')), play('me', card('CLUB', '2')), play('p0', card('CLUB', '3'))] },
+    ];
+    test('counts score cards that left the president and the ones the AI gave him', () => {
+      assert.equal(pointsNotWonBy(tricks, 'p0'), 1);
+      assert.equal(pointCardsGivenToOwner(tricks, 'me', 'p0'), 1);
+      assert.equal(pointCardsGivenToOwner(tricks, 'x', 'p0'), 0);
+    });
+  });
+
+  describe('selectCardToPlay', () => {
+    const lowCards = () => ['4', '5', '6', '7', '8'].map((r) => card('CLUB', r as Card['rank']));
+    const follow = (plays: ReturnType<typeof play>[], behind: string[], ctx: Record<string, unknown> = {}, opts: { hand?: Card[]; trickNumber?: number; partner?: boolean } = {}) => {
+      const ten = card('DIAMOND', '10');
+      const king = card('DIAMOND', 'K');
+      const three = card('DIAMOND', '3');
+      const hand = opts.hand ?? [ten, three, ...lowCards()];
+      const d = selectCardToPlay({
+        ...base,
+        isPartnerWinningCurrentTrick: !!opts.partner,
+        hand,
+        leadSuit: 'DIAMOND',
+        trickNumber: opts.trickNumber ?? 4,
+        currentTrickPlays: plays,
+        context: {
+          role: 'OPPOSITION',
+          selfId: 'me',
+          ownerPlayerId: 'p0',
+          bidScore: 14,
+          friendRevealed: false,
+          friendDeclaration: { type: 'MIGHTY' },
+          playersBehind: behind,
+          knownAllyIds: [],
+          rng: () => 0,
+          ...ctx,
+        },
+      });
+      return { d, ten, king, three, hand };
+    };
+
+    test('situation 1: before the reveal, feeds the weakest score card to a non-president who will win', () => {
+      const { d, ten } = follow([play('p0', card('DIAMOND', '4')), play('x', card('DIAMOND', 'A'))], []);
+      assert.equal(d.reason, 'feed_opposition');
+      assert.equal(d.cardId, ten.id);
+    });
+
+    test('situation 1: after the reveal, a known fellow opposition player winning last gets points (feed_partner)', () => {
+      const { d } = follow([play('p0', card('DIAMOND', '4')), play('o1', card('DIAMOND', 'A'))], [], { friendRevealed: true, knownAllyIds: ['o1'] }, { partner: true });
+      assert.equal(d.reason, 'feed_partner');
+    });
+
+    test('situation 1: no points when the current winner may well be the hidden friend and could still lose', () => {
+      // A low card by a non-president with two players behind: not safe enough for the opposition.
+      const { d } = follow([play('p0', card('DIAMOND', '2')), play('x', card('DIAMOND', 'J'))], ['y', 'z']);
+      assert.notEqual(d.reason, 'feed_opposition');
+      assert.equal(d.reason, 'dump_low');
+    });
+
+    test('situation 2: the president\'s lead probably gets beaten, so a score card is added instead of dump_low', () => {
+      const { d, ten } = follow([play('p0', card('DIAMOND', 'J'))], ['a', 'b'], { friendRevealed: true, knownAllyIds: ['a', 'b'] });
+      assert.equal(d.reason, 'feed_opposition');
+      assert.equal(d.cardId, ten.id);
+    });
+
+    test('situation 2: last to play with the president winning gives no points, whatever the friend state', () => {
+      for (const revealed of [true, false]) {
+        const { d, three } = follow([play('a', card('DIAMOND', '2')), play('p0', card('DIAMOND', 'A'))], [], { friendRevealed: revealed });
+        assert.equal(d.cardId, three.id);
+        assert.equal(d.reason, 'dump_low');
+      }
+    });
+
+    test('a safe president lead with few players behind is not fed', () => {
+      const { d, three } = follow([play('a', card('DIAMOND', '2')), play('p0', card('DIAMOND', 'A'))], ['b']);
+      assert.equal(d.cardId, three.id);
+    });
+
+    test('winning the trick (win_cheaply) has priority over feeding', () => {
+      const king = card('DIAMOND', 'K');
+      const { d } = follow([play('p0', card('DIAMOND', 'Q'))], ['a', 'b', 'c'], { friendRevealed: true }, { hand: [card('DIAMOND', '10'), king, ...lowCards()] });
+      // The AI can beat the president's queen with its king.
+      assert.equal(d.reason, 'win_cheaply');
+      assert.equal(d.cardId, king.id);
+    });
+
+    test('never feeds the mighty, the joker or the joker call card', () => {
+      const mighty = card('SPADE', 'A');
+      const call = card('CLUB', '3');
+      const d = selectCardToPlay({
+        ...base,
+        hand: [joker(), call, card('DIAMOND', '3')],
+        leadSuit: 'DIAMOND',
+        trickNumber: 4,
+        currentTrickPlays: [play('p0', card('DIAMOND', 'J'))],
+        context: { role: 'OPPOSITION', selfId: 'me', ownerPlayerId: 'p0', friendRevealed: true, playersBehind: ['a', 'b', 'c'], knownAllyIds: [], rng: () => 0 },
+      });
+      assert.notEqual(d.reason, 'feed_opposition');
+      assert.notEqual(d.reason, 'lure_friend');
+      assert.ok(mighty);
+    });
+
+    describe('situation 3: sacrificing a weak score card to draw the friend out', () => {
+      // Trick 4, the president leads a diamond ace with three players behind: likely overturned by the mighty/joker.
+      const lure = (ctx: Record<string, unknown> = {}, opts: { hand?: Card[]; trickNumber?: number } = {}) =>
+        follow([play('p0', card('DIAMOND', 'A'))], ['a', 'b', 'c'], ctx, opts);
+
+      test('sacrifices the weakest score card when the mighty is declared and the friend is hidden', () => {
+        const { d, ten } = lure();
+        assert.equal(d.reason, 'lure_friend');
+        assert.equal(d.cardId, ten.id);
+      });
+
+      test('works for a joker and a card declaration, not for NO_FRIEND / FIRST_TRICK', () => {
+        assert.equal(lure({ friendDeclaration: { type: 'JOKER' } }).d.reason, 'lure_friend');
+        assert.equal(lure({ friendDeclaration: { type: 'CARD', suit: 'HEART', rank: 'A' } }).d.reason, 'lure_friend');
+        assert.notEqual(lure({ friendDeclaration: { type: 'NO_FRIEND' } }).d.reason, 'lure_friend');
+        assert.notEqual(lure({ friendDeclaration: { type: 'FIRST_TRICK' } }).d.reason, 'lure_friend');
+      });
+
+      test('not once the friend is revealed', () => {
+        assert.notEqual(lure({ friendRevealed: true, knownAllyIds: [] }).d.reason, 'lure_friend');
+      });
+
+      test('not when the AI holds the declared card itself', () => {
+        const hand = [card('SPADE', 'A'), card('DIAMOND', '10'), card('DIAMOND', '3'), ...lowCards()];
+        assert.notEqual(lure({}, { hand }).d.reason, 'lure_friend');
+      });
+
+      test('limit: only once per game (a score card already given to a president trick counts)', () => {
+        const earlier = [
+          { leadSuit: 'CLUB', winnerPlayerId: 'p0', cards: [play('p0', card('CLUB', 'A')), play('me', card('CLUB', 'J'))] },
+        ];
+        assert.notEqual(lure({ tricks: earlier }).d.reason, 'lure_friend');
+        // A score card that went to somebody else does not count against the limit.
+        const elsewhere = [
+          { leadSuit: 'CLUB', winnerPlayerId: 'x', cards: [play('x', card('CLUB', 'A')), play('me', card('CLUB', '2'))] },
+        ];
+        assert.equal(lure({ tricks: elsewhere }).d.reason, 'lure_friend');
+      });
+
+      test('gain/loss guard: not when the opposition already has enough points to stop the bid', () => {
+        // Bid 14 needs the opposition at 7+; points that did not go to the president: 7.
+        const sevenPoints = [
+          { leadSuit: 'CLUB', winnerPlayerId: 'x', cards: ['10', 'J', 'Q', 'K', 'A'].map((r, i) => play(`q${i}`, card('CLUB', r as Card['rank']))) },
+          { leadSuit: 'SPADE', winnerPlayerId: 'y', cards: [play('q0', card('SPADE', '10')), play('q1', card('SPADE', 'J'))] },
+        ];
+        assert.notEqual(lure({ tricks: sevenPoints, bidScore: 14 }).d.reason, 'lure_friend');
+        // Bid 13 needs the opposition at 8+: seven is not enough yet, so the lure is still allowed.
+        assert.equal(lure({ tricks: sevenPoints, bidScore: 13 }).d.reason, 'lure_friend');
+      });
+
+      test('guard: not in the last tricks', () => {
+        assert.notEqual(lure({}, { trickNumber: TOTAL_TRICKS - 1 }).d.reason, 'lure_friend');
+      });
+
+      test('not when the president is not the one winning the trick, or leads (no card yet)', () => {
+        const { d } = follow([play('p0', card('DIAMOND', '2')), play('x', card('DIAMOND', 'A'))], ['a', 'b', 'c']);
+        assert.notEqual(d.reason, 'lure_friend');
+      });
+
+      test('the lure uses no score card besides the weakest one', () => {
+        const { d, hand } = lure();
+        const chosen = hand.find((c) => c.id === d.cardId)!;
+        assert.equal(chosen.rank, '10');
+      });
     });
   });
 });
