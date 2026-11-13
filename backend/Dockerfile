@@ -7,7 +7,9 @@ FROM base AS builder
 RUN apk add --no-cache libc6-compat openssl ca-certificates python3 make g++ && update-ca-certificates
 WORKDIR /app
 COPY backend/package.json backend/package-lock.json* backend/.npmrc* ./
-RUN npm ci
+# JFrog 인증 토큰은 BuildKit secret 으로만 주입한다. (이미지 레이어/ARG/ENV 에 남지 않는다)
+RUN --mount=type=secret,id=npm_auth_token \
+    NPM_AUTH_TOKEN="$(cat /run/secrets/npm_auth_token)" npm ci
 COPY backend/prisma ./prisma
 ENV PRISMA_CLI_BINARY_FETCH=true
 

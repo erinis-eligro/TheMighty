@@ -7,7 +7,9 @@ FROM base AS builder
 RUN apk add --no-cache libc6-compat openssl ca-certificates python3 make g++ && update-ca-certificates
 WORKDIR /app
 COPY frontend/package.json frontend/package-lock.json frontend/.npmrc ./
-RUN npm ci
+# JFrog 인증 토큰은 BuildKit secret 으로만 주입한다. (이미지 레이어/ARG/ENV 에 남지 않는다)
+RUN --mount=type=secret,id=npm_auth_token \
+    NPM_AUTH_TOKEN="$(cat /run/secrets/npm_auth_token)" npm ci
 COPY frontend/ ./
 # NEXT_PUBLIC_* 값은 클라이언트 번들에 빌드 시점에 인라인되므로 반드시 build-arg 로 주입한다.
 # 브라우저가 접근 가능한 백엔드 주소여야 한다 (컨테이너 호스트명 X).

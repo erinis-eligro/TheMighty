@@ -23,6 +23,8 @@ services:
       dockerfile: backend/Dockerfile
       args:
         NODE_TLS_REJECT_UNAUTHORIZED: ${NODE_TLS_REJECT_UNAUTHORIZED:-1}
+      secrets:
+        - npm_auth_token
     container_name: mighty-backend
     depends_on:
       postgres:
@@ -56,6 +58,8 @@ services:
       args:
         # 브라우저에서 접근 가능한 백엔드 주소. 빌드 시점에 번들에 고정된다.
         NEXT_PUBLIC_BACKEND_URL: ${NEXT_PUBLIC_BACKEND_URL:-http://localhost:3001}
+      secrets:
+        - npm_auth_token
     container_name: mighty-frontend
     depends_on:
       backend:
@@ -66,6 +70,11 @@ services:
     ports:
       - "3000:3000"
     restart: unless-stopped
+
+# 빌드 시 npm 인증(JFrog)용. 셸/.env 의 NPM_AUTH_TOKEN 값을 읽는다. 값은 저장소에 커밋하지 않는다.
+secrets:
+  npm_auth_token:
+    environment: NPM_AUTH_TOKEN
 
 volumes:
   mighty_pg_data:
