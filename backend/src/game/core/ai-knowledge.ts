@@ -12,6 +12,7 @@ import {
   SUITS,
   RANKS,
   Rank,
+  isPointCard,
 } from './rules';
 
 /**
@@ -24,6 +25,8 @@ export interface PublicTrick {
   /** Suit to follow; for a joker lead, the suit the leader named. */
   leadSuit?: string;
   cards: { playerId: string; card: Card }[];
+  /** Who took the trick; set once it is finished (public). */
+  winnerPlayerId?: string;
 }
 
 /** Suits a player is known to hold none of (they failed to follow it). */
@@ -199,4 +202,95 @@ export function estimateOppositionGiruda({
   for (const c of [...hand, ...played]) if (c.suit === giruda && !isJokerCard(c)) seen.add(c.rank);
   const allyHeld = allyCards.filter((c) => c.suit === giruda && !seen.has(c.rank)).length;
   return Math.max(0, SUIT_SIZE - seen.size - allyHeld);
+}
+
+/** A player still to play in the trick, as seen by an opposition viewer. */
+export interface TrickSeat {
+  /** Chance (0..1) that this player is on the owner team. */
+  ownerTeamProb: number;
+  voids: ReadonlySet<string>;
+}
+
+/**
+ * Chance that `otherId` is on the owner team, from an OPPOSITION viewer's point of view and public
+ * information only. The president is public; after the reveal the viewer's known allies are the whole
+ * opposition (everybody else is owner team). Before it, the friend is one of the other three
+ * non-president players unless no friend was declared, so each of them is the friend with 1/3.
+ */
+export function ownerTeamProbability({
+  otherId,
+  ownerPlayerId,
+  friendRevealed,
+  knownAllyIds,
+  friendDeclaration,
+}: {
+  otherId: string;
+  ownerPlayerId: string;
+  friendRevealed: boolean;
+  knownAllyIds: readonly string[];
+  friendDeclaration?: { type: string } | null;
+}): number {
+  if (otherId === ownerPlayerId) return 1;
+  if (friendRevealed) return knownAllyIds.includes(otherId) ? 0 : 1;
+  return friendDeclaration?.type === 'NO_FRIEND' ? 0 : 1 / 3;
+}
+
+/**
+ * Who is likely to take the trick, as the chance that the owner team does (the rest is the opposition).
+ * The best card so far belongs to the owner team with `bestOwnerTeamProb`. Every player still to play
+ * turns the trick over with his own chance (`trickBeatenRisk` with him alone); that is a threat to the
+ * team he is NOT on, so a seat on the owner team with probability q threatens an opposition card with
+ * q * risk and an owner-team card with (1 - q) * risk. With nobody behind the current best simply wins.
+ */
+export function ownerTeamTrickChance({
+  bestCard,
+  bestOwnerTeamProb,
+  leadSuit,
+  giruda,
+  jokerPowerless,
+  unseen,
+  behind,
+  cardsPerOpponent,
+}: {
+  bestCard: Card;
+  bestOwnerTeamProb: number;
+  leadSuit: string | undefined;
+  giruda: string;
+  jokerPowerless: boolean;
+  unseen: Card[];
+  behind: TrickSeat[];
+  cardsPerOpponent: number;
+}): number {
+  let ownerKeeps = 1;
+  let ownerGains = 1;
+  for (const seat of behind) {
+    const risk = trickBeatenRisk({
+      bestCard,
+      leadSuit,
+      giruda,
+      jokerPowerless,
+      unseen,
+      opponents: [{ voids: seat.voids }],
+      cardsPerOpponent,
+    });
+    ownerKeeps *= 1 - (1 - seat.ownerTeamProb) * risk;
+    ownerGains *= 1 - seat.ownerTeamProb * risk;
+  }
+  return bestOwnerTeamProb * ownerKeeps + (1 - bestOwnerTeamProb) * (1 - ownerGains);
+}
+
+/** Score cards in finished tricks that somebody other than `playerId` took (public). */
+export function pointsNotWonBy(tricks: PublicTrick[], playerId: string): number {
+  return tricks
+    .filter((t) => t.winnerPlayerId !== undefined && t.winnerPlayerId !== playerId)
+    .reduce((sum, t) => sum + t.cards.filter((p) => isPointCard(p.card)).length, 0);
+}
+
+/** Finished tricks the owner took in which `playerId` put in a score card (public). */
+export function pointCardsGivenToOwner(tricks: PublicTrick[], playerId: string, ownerPlayerId: string): number {
+  return tricks.filter(
+    (t) =>
+      t.winnerPlayerId === ownerPlayerId &&
+      t.cards.some((p) => p.playerId === playerId && isPointCard(p.card))
+  ).length;
 }
