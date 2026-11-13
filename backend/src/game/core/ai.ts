@@ -69,8 +69,18 @@ export interface AiPlayDecision {
   jokerLeadSuit?: string;
 }
 
-/** Score cards a hand is assumed to win before its own cards are counted (the friend's help and luck). */
-const BASE_ESTIMATE = 7;
+/** Score cards a hand is assumed to win before its own cards are counted (the friend's help, the kitty and luck). */
+const BASE_ESTIMATE = 8;
+
+/** Giruda cards beyond this many are worth `LONG_GIRUDA_BONUS` each (a long trump suit keeps control of the game). */
+const LONG_GIRUDA_FROM = 4;
+const LONG_GIRUDA_BONUS = 0.5;
+
+/**
+ * The AI bids this far below its own estimate (never below the lowest legal score), so a strong hand
+ * opens high instead of at the minimum and still has room to answer a raise.
+ */
+const BID_HEADROOM = 1;
 
 /** A friend holding the declared mighty leads it from this trick on (it reveals the friend while the president can still plan). */
 const FRIEND_MIGHTY_LEAD_FROM = 5;
@@ -144,6 +154,8 @@ export function estimateHandScore(hand: Card[], giruda: BidGiruda): number {
       estimate += offSuitValue[c.rank as Rank] ?? 0;
     }
   }
+  // A long giruda keeps control of the game: every card beyond the fourth is worth extra.
+  if (girudaCount > LONG_GIRUDA_FROM) estimate += (girudaCount - LONG_GIRUDA_FROM) * LONG_GIRUDA_BONUS;
   // Short side suits can be trumped once the giruda is long enough.
   if (girudaCount >= 4) {
     for (const s of SUITS) {
@@ -155,7 +167,8 @@ export function estimateHandScore(hand: Card[], giruda: BidGiruda): number {
 
 /**
  * Bid decision. The giruda candidates are the longest suit(s) of the hand plus no-giruda;
- * the AI bids the lowest legal score when its estimate reaches it, never above MAX_BID.
+ * the AI bids close to its own estimate (jump bid, `BID_HEADROOM` below it) rather than the lowest
+ * legal score, never below the lowest legal score and never above MAX_BID.
  */
 export function selectBid({
   hand,
@@ -181,11 +194,13 @@ export function selectBid({
   if (lowest === null || lowest > wanted) {
     return { bid: null, giruda: null, reason: lowest === null ? 'cannot_outbid' : 'pass' };
   }
-  if (!validateBid({ score: lowest, giruda: best.giruda, currentBid }).valid) {
+  // Strong hands bid their own level at once; `lowest <= wanted` guarantees the score stays legal.
+  const score = Math.min(wanted, Math.max(lowest, wanted - BID_HEADROOM));
+  if (!validateBid({ score, giruda: best.giruda, currentBid }).valid) {
     return { bid: null, giruda: null, reason: 'pass' };
   }
   return {
-    bid: lowest,
+    bid: score,
     giruda: best.giruda,
     reason: best.giruda === 'NO_GIRUDA' ? 'bid_no_giruda' : 'bid_longest_suit',
   };
