@@ -140,6 +140,12 @@ describe('AI bidding', () => {
   });
 });
 
+function newEngineForBidding(): GameEngine {
+  const engine = new GameEngine({ players: makePlayers(), giruda: 'NO_GIRUDA' });
+  engine.deal();
+  return engine;
+}
+
 describe('AI bidding aggressiveness', () => {
   // Joker, mighty (spade ace for a heart giruda), a five-card heart suit and two more aces/kings.
   const strongHand = () => [
@@ -170,12 +176,14 @@ describe('AI bidding aggressiveness', () => {
     assert.equal(selectBid({ hand, currentBid: { bidderIndex: 1, score: wanted, giruda: 'SPADE' } }).bid, null);
   });
 
-  test('a hand that only just reaches the minimum still bids the minimum', () => {
-    const hand = strongHand();
+  test('every bid on random hands stays within the legal range and the estimate', () => {
     for (let i = 0; i < 200; i++) {
-      const trial = [...hand].sort(() => Math.random() - 0.5);
-      const d = selectBid({ hand: trial, currentBid: null });
-      if (d.bid !== null) assert.ok(d.bid >= MIN_BID && d.bid <= MAX_BID);
+      const engine = newEngineForBidding();
+      const hand = engine.state.players[0].hand;
+      const d = selectBid({ hand, currentBid: null });
+      if (d.bid === null) continue;
+      assert.ok(d.bid >= MIN_BID && d.bid <= MAX_BID);
+      assert.ok(d.bid <= Math.floor(estimateHandScore(hand, d.giruda!)) + (d.giruda === 'NO_GIRUDA' ? 0 : 0) + 2);
     }
   });
 });
