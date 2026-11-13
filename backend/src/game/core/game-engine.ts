@@ -414,11 +414,15 @@ export class GameEngine {
     const tricks = (current ? [...finished, current] : finished).map((t) => ({
       leadSuit: t.leadSuit,
       cards: t.cards.map((p) => ({ playerId: p.playerId, card: p.card })),
+      winnerPlayerId: t.winnerPlayerId,
     }));
     const played = new Set((current?.cards ?? []).map((p) => p.playerId));
     const others = this.state.players.filter((p) => p.id !== viewerId);
     return {
       role: this.getTeamRole(viewerId),
+      selfId: viewerId,
+      ownerPlayerId: this.state.ownerPlayerId,
+      bidScore: this.state.currentBid,
       playedCards: this.getPlayedCards(),
       friendDeclaration: this.state.friendDeclaration,
       friendRevealed: this.state.friendRevealed,
