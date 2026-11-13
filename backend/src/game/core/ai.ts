@@ -20,6 +20,9 @@ import {
   POINT_RANKS,
   Rank,
 } from './rules';
+
+/** Score cards in the deck (10, J, Q, K, A of four suits). */
+const TOTAL_SCORE_CARDS = POINT_RANKS.length * SUITS.length;
 import { validatePlay } from './trick';
 import { validateBid, lowestValidScore } from './bidding';
 import {
@@ -27,9 +30,14 @@ import {
   KnownOpponent,
   PublicTrick,
   trickBeatenRisk,
+  TrickSeat,
   cardsHeldByAllies,
   estimateOppositionGiruda,
   findVoidSuits,
+  ownerTeamProbability,
+  ownerTeamTrickChance,
+  pointCardsGivenToOwner,
+  pointsNotWonBy,
   trickStrength,
   unseenCards,
 } from './ai-knowledge';
@@ -76,6 +84,19 @@ const LEAD_BAND = 2;
 /** The partner's trick is fed when the chance of it being beaten stays under this (lower with points on the table). */
 const RISK_LIMIT_PER_POINT = 0.05;
 const MIN_RISK_LIMIT = 0.1;
+
+/** The opposition adds a score card when it expects to take the trick with at least this chance (friend known / still hidden). */
+const OPPOSITION_FEED_MIN_CHANCE = 0.6;
+const OPPOSITION_FEED_MIN_CHANCE_HIDDEN_FRIEND = 0.65;
+
+/**
+ * Sacrificing a weak score card to make the hidden friend show his declared card (lure): it needs the
+ * president's card to be beaten with at least this chance, is done at most this many times per game
+ * (counting every score card the AI already put into an owner-team trick), and not in the last tricks.
+ */
+const LURE_MIN_BEATEN_CHANCE = BEATEN_RISK_THRESHOLD;
+const LURE_MAX_PER_GAME = 1;
+const LURE_MIN_TRICKS_LEFT = 3;
 
 /** In this many last tricks the owner team may still cover its partner's master card with the mighty. */
 const MIGHTY_COVER_LAST_TRICKS = 2;
@@ -282,6 +303,12 @@ export interface AiPlayContext {
   playersBehind?: string[];
   /** Players this one knows are on its team (see `isAlly`); never includes a hidden friend. */
   knownAllyIds?: string[];
+  /** The president (public). Lets the opposition tell the president's cards from the others'. */
+  ownerPlayerId?: string;
+  /** The AI's own player id. */
+  selfId?: string;
+  /** The final bid (public): the owner team needs this many score cards. */
+  bidScore?: number;
   /** Random source for choosing between equal options; inject a seeded one in tests. */
   rng?: () => number;
 }
@@ -482,8 +509,135 @@ export function selectCardToPlay({
     }
   }
 
-  // Cannot (or should not) win: give away the least, and never points to the other team.
+  // Cannot (or should not) win: the opposition may still put a score card into a trick it expects to take.
+  if (role === 'OPPOSITION') {
+    const feed = selectOppositionFeed({
+      hand,
+      valid,
+      currentBest,
+      currentTrickPlays,
+      leadSuit,
+      giruda,
+      trickNumber,
+      totalTricks,
+      jokerPowerless,
+      unseen,
+      voids,
+      handSize: hand.length,
+      context,
+      byDump,
+      rng,
+    });
+    if (feed) return feed;
+  }
+
+  // Never points to the other team.
   return { cardId: byRandomDump(valid).id, reason: 'dump_low' };
+}
+
+/**
+ * Opposition player that cannot (or should not) win the trick: add a score card when the trick will
+ * probably go to the opposition (`feed_opposition`), or sacrifice one weak score card so the hidden
+ * friend has to show himself (`lure_friend`). Judged from public information only: the president is
+ * public, the friend is one of the other three until revealed (see `ownerTeamProbability`).
+ * Returns null when no score card should be given.
+ */
+function selectOppositionFeed({
+  hand,
+  valid,
+  currentBest,
+  currentTrickPlays,
+  leadSuit,
+  giruda,
+  trickNumber,
+  totalTricks,
+  jokerPowerless,
+  unseen,
+  voids,
+  handSize,
+  context,
+  byDump,
+  rng,
+}: {
+  hand: Card[];
+  valid: Card[];
+  currentBest: { playerId: string; card: Card };
+  currentTrickPlays: { playerId: string; card: Card }[];
+  leadSuit?: string;
+  giruda: string;
+  trickNumber: number;
+  totalTricks: number;
+  jokerPowerless: boolean;
+  unseen: Card[];
+  voids: Map<string, Set<string>>;
+  handSize: number;
+  context: AiPlayContext;
+  byDump: (a: Card, b: Card) => number;
+  rng: () => number;
+}): AiPlayDecision | null {
+  const { ownerPlayerId, playersBehind } = context;
+  // Without knowing the president (or who is still to play) nothing can be judged.
+  if (!ownerPlayerId || !playersBehind) return null;
+  const feedable = valid
+    .filter((c) => isPointCard(c) && !isJokerCard(c) && !isMightyCard(c, giruda) && !isJokerCallCard(c, giruda))
+    .sort(byDump);
+  if (feedable.length === 0) return null;
+
+  const friendRevealed = !!context.friendRevealed;
+  const knownAllyIds = context.knownAllyIds ?? [];
+  const probOf = (id: string) =>
+    ownerTeamProbability({
+      otherId: id,
+      ownerPlayerId,
+      friendRevealed,
+      knownAllyIds,
+      friendDeclaration: context.friendDeclaration,
+    });
+  const none = new Set<string>();
+  const behind: TrickSeat[] = playersBehind.map((id) => ({ ownerTeamProb: probOf(id), voids: voids.get(id) ?? none }));
+  const ownerChance = ownerTeamTrickChance({
+    bestCard: currentBest.card,
+    bestOwnerTeamProb: probOf(currentBest.playerId),
+    leadSuit,
+    giruda,
+    jokerPowerless,
+    unseen,
+    behind,
+    cardsPerOpponent: handSize,
+  });
+  const oppositionChance = 1 - ownerChance;
+  const feedMin = friendRevealed ? OPPOSITION_FEED_MIN_CHANCE : OPPOSITION_FEED_MIN_CHANCE_HIDDEN_FRIEND;
+  if (oppositionChance >= feedMin) {
+    return { cardId: pickAmong(feedable, (c) => dumpValue(c, giruda), 0, rng).id, reason: 'feed_opposition' };
+  }
+
+  // Lure: the president leads a card that is probably beaten, and the friend's declared card is worth showing.
+  const declaration = context.friendDeclaration?.type;
+  // A declared card in my own hand cannot be drawn out of the friend.
+  const declaredCards = cardsHeldByAllies('PRESIDENT', context.friendDeclaration, giruda);
+  const holdsDeclared = declaredCards.some((d) => hand.some((c) => (d.suit === 'JOKER' ? isJokerCard(c) : c.suit === d.suit && c.rank === d.rank)));
+  const canLure =
+    !friendRevealed &&
+    !holdsDeclared &&
+    (declaration === 'MIGHTY' || declaration === 'JOKER' || declaration === 'CARD') &&
+    currentBest.playerId === ownerPlayerId &&
+    currentTrickPlays.length > 0 &&
+    oppositionChance >= LURE_MIN_BEATEN_CHANCE &&
+    trickNumber <= totalTricks - LURE_MIN_TRICKS_LEFT;
+  if (!canLure) return null;
+
+  const tricks = context.tricks ?? [];
+  // Limit per AI: score cards it already put into a trick the president took count as sacrifices.
+  if (!context.selfId || pointCardsGivenToOwner(tricks, context.selfId, ownerPlayerId) >= LURE_MAX_PER_GAME) return null;
+  // Score cards that did not go to the president are at most the opposition's (the hidden friend's
+  // are in there too, so this overestimates and errs on the side of not sacrificing). Once they
+  // already stop the bid, a gift to the owner team is not worth it.
+  if (context.bidScore !== undefined && pointsNotWonBy(tricks, ownerPlayerId) > TOTAL_SCORE_CARDS - context.bidScore) {
+    return null;
+  }
+
+  // The weakest score card; the lowest dump value is first.
+  return { cardId: feedable[0].id, reason: 'lure_friend' };
 }
 
 function selectLeadCard({
