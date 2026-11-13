@@ -131,11 +131,60 @@ describe('AI bidding', () => {
       card('HEART', '9'), card('HEART', '8'), card('SPADE', 'A'), card('DIAMOND', 'A'), joker(),
     ];
     assert.ok(estimateHandScore(hand, 'HEART') > MAX_BID);
-    assert.equal(selectBid({ hand, currentBid: null }).bid, MIN_BID);
+    // A hand this strong opens just under the maximum, leaving room to answer a raise.
+    assert.equal(selectBid({ hand, currentBid: null }).bid, MAX_BID - 1);
     const d = selectBid({ hand, currentBid: { bidderIndex: 1, score: MAX_BID, giruda: 'NO_GIRUDA' } });
     assert.equal(d.bid, null);
     const d2 = selectBid({ hand, currentBid: { bidderIndex: 1, score: MAX_BID, giruda: 'SPADE' } });
     assert.equal(d2.bid, null);
+  });
+});
+
+function newEngineForBidding(): GameEngine {
+  const engine = new GameEngine({ players: makePlayers(), giruda: 'NO_GIRUDA' });
+  engine.deal();
+  return engine;
+}
+
+describe('AI bidding aggressiveness', () => {
+  // Joker, mighty (spade ace for a heart giruda), a five-card heart suit and two more aces/kings.
+  const strongHand = () => [
+    joker(), card('SPADE', 'A'), card('HEART', 'A'), card('HEART', 'K'), card('HEART', '10'),
+    card('HEART', '5'), card('HEART', '3'), card('DIAMOND', 'A'), card('CLUB', 'K'), card('CLUB', '4'),
+  ];
+
+  test('a strong hand opens near its estimate instead of the minimum', () => {
+    const hand = strongHand();
+    const d = selectBid({ hand, currentBid: null });
+    assert.equal(d.giruda, 'HEART');
+    const wanted = Math.min(MAX_BID, Math.floor(estimateHandScore(hand, 'HEART')));
+    assert.equal(d.bid, wanted - 1);
+    assert.ok(d.bid !== null && d.bid >= 17, `bid ${d.bid} is too timid for this hand`);
+  });
+
+  test('raises over a low bid straight to its own level, never above its estimate', () => {
+    const hand = strongHand();
+    const wanted = Math.min(MAX_BID, Math.floor(estimateHandScore(hand, 'HEART')));
+    const d = selectBid({ hand, currentBid: { bidderIndex: 1, score: 13, giruda: 'SPADE' } });
+    assert.ok(d.bid !== null && d.bid > 14 && d.bid <= wanted);
+  });
+
+  test('answers a raise up to its estimate and then passes', () => {
+    const hand = strongHand();
+    const wanted = Math.min(MAX_BID, Math.floor(estimateHandScore(hand, 'HEART')));
+    assert.equal(selectBid({ hand, currentBid: { bidderIndex: 1, score: wanted - 1, giruda: 'SPADE' } }).bid, wanted);
+    assert.equal(selectBid({ hand, currentBid: { bidderIndex: 1, score: wanted, giruda: 'SPADE' } }).bid, null);
+  });
+
+  test('every bid on random hands stays within the legal range and the estimate', () => {
+    for (let i = 0; i < 200; i++) {
+      const engine = newEngineForBidding();
+      const hand = engine.state.players[0].hand;
+      const d = selectBid({ hand, currentBid: null });
+      if (d.bid === null) continue;
+      assert.ok(d.bid >= MIN_BID && d.bid <= MAX_BID);
+      assert.ok(d.bid <= Math.floor(estimateHandScore(hand, d.giruda!)));
+    }
   });
 });
 
