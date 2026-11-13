@@ -183,7 +183,7 @@ describe('AI bidding aggressiveness', () => {
       const d = selectBid({ hand, currentBid: null });
       if (d.bid === null) continue;
       assert.ok(d.bid >= MIN_BID && d.bid <= MAX_BID);
-      assert.ok(d.bid <= Math.floor(estimateHandScore(hand, d.giruda!)) + (d.giruda === 'NO_GIRUDA' ? 0 : 0) + 2);
+      assert.ok(d.bid <= Math.floor(estimateHandScore(hand, d.giruda!)));
     }
   });
 });
